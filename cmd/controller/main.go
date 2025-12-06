@@ -41,11 +41,11 @@ func main() {
 
 		for _, w := range workloads {
 			// Pass 'k8sClient' as the first argument now
-			suggestion := engine.GenerateLogic(k8sClient, w)
+			suggestions := engine.GenerateLogic(k8sClient, w)
 
-			if suggestion != nil {
-				fmt.Printf("[Metric Engine] %s\n   CPU Request: %s, Limit: %s\n   Mem Request: %s, Limit: %s\n",
-					suggestion.WorkloadName,
+			for _, suggestion := range suggestions {
+				fmt.Printf("[Metric Engine] %s (Container: %s)\n   CPU Request: %s, Limit: %s\n   Mem Request: %s, Limit: %s\n",
+					suggestion.WorkloadName, suggestion.ContainerName,
 					suggestion.CpuRequest, suggestion.CpuLimit,
 					suggestion.MemoryRequest, suggestion.MemoryLimit)
 

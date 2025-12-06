@@ -20,173 +20,195 @@ var metricsGVR = schema.GroupVersionResource{
 }
 
 type SuggestionResult struct {
-	WorkloadName  string
-	WorkloadType  string
-	ContainerName string
-	PodCount      int64
-	CpuRequest    string
-	CpuLimit      string
-	MemoryRequest string
-	MemoryLimit   string
-	Status        string // "Pending", "Ready" etc could be inferred but we'll leave it to reporter or unused
+	WorkloadName    string
+	WorkloadType    string
+	ContainerName   string
+	ContainerIndex  int
+	TotalContainers int
+	PodCount        int64
+	CpuRequest      string
+	CpuLimit        string
+	MemoryRequest   string
+	MemoryLimit     string
+	Status          string
+	Source          string
 }
 
-// GenerateLogic now requires the Client to fetch metrics
-func GenerateLogic(client dynamic.Interface, workload unstructured.Unstructured) *SuggestionResult {
+// GenerateLogic returns a list of suggestions, one per container
+func GenerateLogic(client dynamic.Interface, workload unstructured.Unstructured) []*SuggestionResult {
 	name := workload.GetName()
 	ns := workload.GetNamespace()
 	kind := workload.GetKind()
 
-	// 1. Get the Label Selector to find the pods
+	// 1. Get the Label Selector
 	selectorMap, found, _ := unstructured.NestedStringMap(workload.Object, "spec", "selector", "matchLabels")
 	if !found || len(selectorMap) == 0 {
-		return nil // Cannot find pods without selector
+		return nil
 	}
-
 	selectorStr := mapToString(selectorMap)
 
-	// 2. Fetch Metrics for these pods
+	// 2. Fetch Metrics
 	metricsList, err := client.Resource(metricsGVR).Namespace(ns).List(context.TODO(), metav1.ListOptions{
 		LabelSelector: selectorStr,
 	})
-
 	if err != nil {
 		fmt.Printf("Error fetching metrics for %s: %v\n", name, err)
 		return nil
 	}
-
 	if len(metricsList.Items) == 0 {
-		return nil // No running pods found
+		return nil
 	}
-
 	podCount := int64(len(metricsList.Items))
 
-	// 3. Calculate Average Usage
-	var totalCpuUsage int64 = 0 // nanocores
-	var totalMemUsage int64 = 0 // bytes
-	var containerName string    // We'll take the first container found in metrics for now.
-	// NOTE: Real logic should iterate over all containers in the workload spec.
-	// For this simple bot, we assume 1 container or we just pick the first one we find in metrics.
-
-	// Let's first identify the container name we want to suggest for.
-	// We'll peek at the first pod metric
-	if len(metricsList.Items) > 0 {
-		containers, _, _ := unstructured.NestedSlice(metricsList.Items[0].Object, "containers")
-		if len(containers) > 0 {
-			c := containers[0].(map[string]interface{})
-			containerName = c["name"].(string)
-		}
-	}
-
-	for _, podMetric := range metricsList.Items {
-		containers, _, _ := unstructured.NestedSlice(podMetric.Object, "containers")
-		for _, cInt := range containers {
-			c := cInt.(map[string]interface{})
-			if c["name"].(string) == containerName {
-				usage, _, _ := unstructured.NestedMap(c, "usage")
-				totalCpuUsage += parseCpuToNano(fmt.Sprintf("%v", usage["cpu"]))
-				totalMemUsage += parseMemoryToBytes(fmt.Sprintf("%v", usage["memory"]))
-			}
-		}
-	}
-
-	avgCpu := totalCpuUsage / podCount
-	avgMem := totalMemUsage / podCount
-
-	// 4. Get Current Requests/Limits from Workload Spec
-	// We need to look up spec.template.spec.containers[name==containerName]
+	// 3. Get Containers from Workload Spec to iterate deterministically
 	podSpec, found, _ := unstructured.NestedMap(workload.Object, "spec", "template", "spec")
-	var currentCpuReqNano, currentCpuLimNano, currentMemReqBytes, currentMemLimBytes int64
-	var hasCpuLimit, hasMemLimit bool
+	if !found {
+		return nil
+	}
+	containersSpec, _, _ := unstructured.NestedSlice(podSpec, "containers")
+	totalContainers := len(containersSpec)
 
-	if found {
-		containers, _, _ := unstructured.NestedSlice(podSpec, "containers")
-		for _, cInt := range containers {
-			c := cInt.(map[string]interface{})
-			if c["name"].(string) == containerName {
-				resources, _, _ := unstructured.NestedMap(c, "resources")
-				requests, _, _ := unstructured.NestedMap(resources, "requests")
-				limits, _, _ := unstructured.NestedMap(resources, "limits")
+	var results []*SuggestionResult
 
-				if requests != nil {
-					currentCpuReqNano = parseCpuToNano(fmt.Sprintf("%v", requests["cpu"]))
-					currentMemReqBytes = parseMemoryToBytes(fmt.Sprintf("%v", requests["memory"]))
+	for idx, cInt := range containersSpec {
+		cMap, ok := cInt.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		containerName := cMap["name"].(string)
+
+		// 4. Calculate Usage for this container
+		var totalCpuUsage int64 = 0
+		var totalMemUsage int64 = 0
+
+		for _, podMetric := range metricsList.Items {
+			metricContainers, _, _ := unstructured.NestedSlice(podMetric.Object, "containers")
+			for _, mcInt := range metricContainers {
+				mc := mcInt.(map[string]interface{})
+				if mc["name"].(string) == containerName {
+					usage, _, _ := unstructured.NestedMap(mc, "usage")
+					totalCpuUsage += parseCpuToNano(fmt.Sprintf("%v", usage["cpu"]))
+					totalMemUsage += parseMemoryToBytes(fmt.Sprintf("%v", usage["memory"]))
+					break
 				}
-				if limits != nil {
-					if val, ok := limits["cpu"]; ok {
-						currentCpuLimNano = parseCpuToNano(fmt.Sprintf("%v", val))
-						hasCpuLimit = true
-					}
-					if val, ok := limits["memory"]; ok {
-						currentMemLimBytes = parseMemoryToBytes(fmt.Sprintf("%v", val))
-						hasMemLimit = true
-					}
-				}
-				break
 			}
 		}
-	}
 
-	// 5. Calculate Recommended Requests
-	recommendedCpuNano := float64(avgCpu) * 1.2
-	recommendedMemBytes := float64(avgMem) * 1.2
+		avgCpu := totalCpuUsage / podCount
+		avgMem := totalMemUsage / podCount
 
-	// Apply Floors
-	const MinCpuMilli = 30
-	const MinMemMi = 50
-	if recommendedCpuNano < float64(MinCpuMilli*1000000) {
-		recommendedCpuNano = float64(MinCpuMilli * 1000000)
-	}
-	if recommendedMemBytes < float64(MinMemMi*1024*1024) {
-		recommendedMemBytes = float64(MinMemMi * 1024 * 1024)
-	}
+		// 5. Get Current Requests/Limits from Spec
+		var currentCpuReqNano, currentCpuLimNano, currentMemReqBytes, currentMemLimBytes int64
+		var hasCpuLimit, hasMemLimit bool
 
-	targetCpuReqNano := int64(recommendedCpuNano)
-	targetMemReqBytes := int64(recommendedMemBytes)
+		resources, _, _ := unstructured.NestedMap(cMap, "resources")
+		requests, _, _ := unstructured.NestedMap(resources, "requests")
+		limits, _, _ := unstructured.NestedMap(resources, "limits")
 
-	// 6. Calculate Recommended Limits (Maintain Ratio)
-	var targetCpuLimNano, targetMemLimBytes int64
+		if requests != nil {
+			currentCpuReqNano = parseCpuToNano(fmt.Sprintf("%v", requests["cpu"]))
+			currentMemReqBytes = parseMemoryToBytes(fmt.Sprintf("%v", requests["memory"]))
+		}
+		if limits != nil {
+			if val, ok := limits["cpu"]; ok {
+				currentCpuLimNano = parseCpuToNano(fmt.Sprintf("%v", val))
+				hasCpuLimit = true
+			}
+			if val, ok := limits["memory"]; ok {
+				currentMemLimBytes = parseMemoryToBytes(fmt.Sprintf("%v", val))
+				hasMemLimit = true
+			}
+		}
 
-	if hasCpuLimit && currentCpuReqNano > 0 {
-		ratio := float64(currentCpuLimNano) / float64(currentCpuReqNano)
-		targetCpuLimNano = int64(float64(targetCpuReqNano) * ratio)
-	}
-	if hasMemLimit && currentMemReqBytes > 0 {
-		ratio := float64(currentMemLimBytes) / float64(currentMemReqBytes)
-		targetMemLimBytes = int64(float64(targetMemReqBytes) * ratio)
-	}
+		// 6. Calculate Recommended
+		recommendedCpuNano := float64(avgCpu) * 1.2
+		recommendedMemBytes := float64(avgMem) * 1.2
 
-	// 7. Format Strings "Current->Target"
-	// Helpers to format
-	fmtCpu := func(nano int64) string { return fmt.Sprintf("%dm", nano/1000000) }
-	fmtMem := func(bytes int64) string { return fmt.Sprintf("%dMi", bytes/(1024*1024)) }
+		const MinCpuMilli = 30
+		const MinMemMi = 50
+		if recommendedCpuNano < float64(MinCpuMilli*1000000) {
+			recommendedCpuNano = float64(MinCpuMilli * 1000000)
+		}
+		if recommendedMemBytes < float64(MinMemMi*1024*1024) {
+			recommendedMemBytes = float64(MinMemMi * 1024 * 1024)
+		}
 
-	cpuRequestStr := fmt.Sprintf("%s->%s", fmtCpu(currentCpuReqNano), fmtCpu(targetCpuReqNano))
-	memRequestStr := fmt.Sprintf("%s->%s", fmtMem(currentMemReqBytes), fmtMem(targetMemReqBytes))
+		targetCpuReqNano := int64(recommendedCpuNano)
+		targetMemReqBytes := int64(recommendedMemBytes)
 
-	var cpuLimitStr, memLimitStr string
-	if hasCpuLimit {
+		// 7. Calculate Limits
+		var targetCpuLimNano, targetMemLimBytes int64
+		if hasCpuLimit && currentCpuReqNano > 0 {
+			ratio := float64(currentCpuLimNano) / float64(currentCpuReqNano)
+			targetCpuLimNano = int64(float64(targetCpuReqNano) * ratio)
+		} else {
+			// If no limit exists, default to the suggested Request (Guaranteed QoS)
+			targetCpuLimNano = targetCpuReqNano
+		}
+
+		if hasMemLimit && currentMemReqBytes > 0 {
+			ratio := float64(currentMemLimBytes) / float64(currentMemReqBytes)
+			targetMemLimBytes = int64(float64(targetMemReqBytes) * ratio)
+		} else {
+			targetMemLimBytes = targetMemReqBytes
+		}
+
+		// 8. Determine Status
+		status := "Optimal"
+
+		// Note: comparing against 0 (missing) will usually trigger Underprovisioned if target > 0
+		cpuUp := targetCpuReqNano > currentCpuReqNano
+		memUp := targetMemReqBytes > currentMemReqBytes
+		cpuDown := targetCpuReqNano < currentCpuReqNano
+		memDown := targetMemReqBytes < currentMemReqBytes
+
+		if cpuUp || memUp {
+			status = "Underprovisioned"
+		} else if cpuDown && memDown {
+			status = "Overprovisioned"
+		} else if cpuDown || memDown {
+			status = "Overprovisioned" // Mixed
+		}
+
+		// 9. Format Strings
+		fmtCpu := func(nano int64) string {
+			if nano == 0 {
+				return "0m (Not Set)"
+			}
+			return fmt.Sprintf("%dm", nano/1000000)
+		}
+		fmtMem := func(bytes int64) string {
+			if bytes == 0 {
+				return "0Mi (Not Set)"
+			}
+			return fmt.Sprintf("%dMi", bytes/(1024*1024))
+		}
+
+		cpuRequestStr := fmt.Sprintf("%s->%s", fmtCpu(currentCpuReqNano), fmtCpu(targetCpuReqNano))
+		memRequestStr := fmt.Sprintf("%s->%s", fmtMem(currentMemReqBytes), fmtMem(targetMemReqBytes))
+
+		var cpuLimitStr, memLimitStr string
+		// Always suggest a limit now
 		cpuLimitStr = fmt.Sprintf("%s->%s", fmtCpu(currentCpuLimNano), fmtCpu(targetCpuLimNano))
-	} else {
-		cpuLimitStr = "Checking..." // Or empty
-	}
-
-	if hasMemLimit {
 		memLimitStr = fmt.Sprintf("%s->%s", fmtMem(currentMemLimBytes), fmtMem(targetMemLimBytes))
-	} else {
-		memLimitStr = "Checking..."
+
+		results = append(results, &SuggestionResult{
+			WorkloadName:    name,
+			WorkloadType:    kind,
+			ContainerName:   containerName,
+			ContainerIndex:  idx,
+			TotalContainers: totalContainers,
+			PodCount:        podCount,
+			CpuRequest:      cpuRequestStr,
+			CpuLimit:        cpuLimitStr,
+			MemoryRequest:   memRequestStr,
+			MemoryLimit:     memLimitStr,
+			Status:          status,
+			Source:          "MetricServer",
+		})
 	}
 
-	return &SuggestionResult{
-		WorkloadName:  name,
-		WorkloadType:  kind,
-		ContainerName: containerName,
-		PodCount:      podCount,
-		CpuRequest:    cpuRequestStr,
-		CpuLimit:      cpuLimitStr,
-		MemoryRequest: memRequestStr,
-		MemoryLimit:   memLimitStr,
-	}
+	return results
 }
 
 // --- Helpers ---

@@ -41,6 +41,8 @@ spec:
                   type: string
                 status:
                   type: string
+                source:
+                  type: string
       # FIX IS HERE: Indented inside 'versions'
       additionalPrinterColumns:
       - name: Type
@@ -67,3 +69,6 @@ spec:
       - name: Status
         type: string
         jsonPath: .spec.status
+      - name: Source
+        type: string
+        jsonPath: .spec.source

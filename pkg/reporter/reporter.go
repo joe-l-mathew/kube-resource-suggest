@@ -21,8 +21,9 @@ var suggestionGVR = schema.GroupVersionResource{
 // UpdateOrReport creates or updates a ResourceSuggestion CR
 func UpdateOrReport(client dynamic.Interface, workload unstructured.Unstructured, suggestion *engine.SuggestionResult) error {
 	ctx := context.TODO()
-	// Custom Naming Logic to avoid overlaps
+	// Custom Naming Logic
 	baseName := suggestion.WorkloadName
+
 	switch suggestion.WorkloadType {
 	case "StatefulSet":
 		baseName += "-sts"
@@ -30,9 +31,12 @@ func UpdateOrReport(client dynamic.Interface, workload unstructured.Unstructured
 		baseName += "-ds"
 	}
 
-	// "For second container add a suffix-1" -> We'll just append the container name
-	// to ensure uniqueness for ALL containers, which covers the requirement.
-	name := fmt.Sprintf("%s-%s-suggestion", baseName, suggestion.ContainerName)
+	// Add numeric suffix if multiple containers exist
+	if suggestion.TotalContainers > 1 {
+		baseName += fmt.Sprintf("-%d", suggestion.ContainerIndex+1)
+	}
+
+	name := baseName
 	ns := workload.GetNamespace()
 
 	// 1. Prepare OwnerReference
@@ -70,7 +74,8 @@ func UpdateOrReport(client dynamic.Interface, workload unstructured.Unstructured
 				"cpuLimit":      suggestion.CpuLimit,
 				"memoryRequest": suggestion.MemoryRequest,
 				"memoryLimit":   suggestion.MemoryLimit,
-				"status":        "Proposed",
+				"status":        suggestion.Status,
+				"source":        suggestion.Source,
 				"lastUpdated":   time.Now().Format(time.RFC3339),
 			},
 		},
