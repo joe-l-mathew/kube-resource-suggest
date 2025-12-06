@@ -1,0 +1,30 @@
+apiVersion: ops-tools.io/v1alpha1
+kind: ResourceSuggestion
+metadata:
+  name: example-suggestion-1
+  namespace: default
+spec:
+  workloadType: "Deployment"
+  containerName: "backend-api"
+  podCount: 5
+  cpuRequest: "500m->400m"
+  cpuLimit: "1000m->800m"
+  memoryRequest: "256Mi->192Mi"
+  memoryLimit: "512Mi->384Mi"
+  status: "Pending"
+
+---
+apiVersion: ops-tools.io/v1alpha1
+kind: ResourceSuggestion
+metadata:
+  name: email-worker-suggestion-2
+spec:
+  workloadType: "Deployment"
+  containerName: "worker-proc"
+  podCount: 10
+  cpuRequest: "50m->30m"
+  cpuLimit: "100m->60m"
+  memoryRequest: "64Mi->32Mi"
+  memoryLimit: "128Mi->64Mi"
+  status: "Ready"
+

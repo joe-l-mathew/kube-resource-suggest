@@ -1,0 +1,69 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: resourcesuggestions.ops-tools.io
+spec:
+  group: ops-tools.io
+  names:
+    plural: resourcesuggestions
+    singular: resourcesuggestion
+    kind: ResourceSuggestion
+    shortNames:
+    - rsugg
+    - sugg
+    - ksugg
+    - resug
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                workloadType:
+                  type: string
+                containerName:
+                  type: string
+                podCount:
+                  type: integer
+                cpuRequest:
+                  type: string
+                cpuLimit:
+                  type: string
+                memoryRequest:
+                  type: string
+                memoryLimit:
+                  type: string
+                status:
+                  type: string
+      # FIX IS HERE: Indented inside 'versions'
+      additionalPrinterColumns:
+      - name: Type
+        type: string
+        jsonPath: .spec.workloadType
+      - name: Pods
+        type: integer
+        jsonPath: .spec.podCount
+      - name: Container
+        type: string
+        jsonPath: .spec.containerName
+      - name: CPU_Request
+        type: string
+        jsonPath: .spec.cpuRequest
+      - name: CPU_Limit
+        type: string
+        jsonPath: .spec.cpuLimit
+      - name: Mem_Request
+        type: string
+        jsonPath: .spec.memoryRequest
+      - name: Mem_Limit
+        type: string
+        jsonPath: .spec.memoryLimit
+      - name: Status
+        type: string
+        jsonPath: .spec.status
