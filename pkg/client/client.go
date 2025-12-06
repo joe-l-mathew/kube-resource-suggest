@@ -12,16 +12,13 @@ import (
 )
 
 // Connect returns a dynamic client interface.
-// It automatically detects if it's running inside a cluster or locally.
 func Connect() (dynamic.Interface, error) {
 	config, err := getClientConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get k8s config: %w", err)
 	}
 
-	// Create the Dynamic Client
-	// We use Dynamic because we need to talk to Custom Resources (CRDs)
-	// that the standard client doesn't know about by default.
+	// Dynamic Client is used for Custom Resources (CRDs)
 	dynClient, err := dynamic.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
@@ -39,11 +36,10 @@ func getClientConfig() (*rest.Config, error) {
 	}
 
 	// 2. Fallback to Local Kubeconfig (works on your laptop)
-	// We check the KUBECONFIG env var or default to ~/.kube/config
 	kubeconfigPath := os.Getenv("KUBECONFIG")
 	if kubeconfigPath == "" {
 		if home := homedir.HomeDir(); home != "" {
-			kubeconfigPath = filepath.Join(home, ".kube", "config")
+			kubeconfigPath = filepath.Join(home, ".kube", "config-kind")
 		}
 	}
 
