@@ -1,0 +1,43 @@
+name: Publish Chart to OCI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'charts/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/charts
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package Chart
+        run: |
+          helm package charts/kube-resource-suggest
+
+      - name: Push Chart to OCI
+        run: |
+          # Finds the .tgz file created by helm package
+          CHART_FILE=$(ls kube-resource-suggest-*.tgz)
+          helm push $CHART_FILE oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}

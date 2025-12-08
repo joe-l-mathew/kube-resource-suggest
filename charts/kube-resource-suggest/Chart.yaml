@@ -4,3 +4,23 @@ description: Intelligent Resource Optimization Controller for Kubernetes
 type: application
 version: 0.1.0
 appVersion: "1.0.0"
+home: https://github.com/joe-l-mathew/kube-resource-suggest
+sources:
+  - https://github.com/joe-l-mathew/kube-resource-suggest
+maintainers:
+  - name: joe-l-mathew
+    url: https://github.com/joe-l-mathew
+keywords:
+  - kubernetes
+  - monitoring
+  - optimization
+  - resources
+  - prometheus
+annotations:
+  artifacthub.io/license: "MIT"
+  artifacthub.io/links: |
+    - name: source
+      url: https://github.com/joe-l-mathew/kube-resource-suggest
+  artifacthub.io/category: "monitoring"
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/prerelease: "false"
