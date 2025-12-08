@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -28,10 +29,15 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 	// 1. Check Connectivity
 	reachable := isPrometheusReachable(promURL)
 
+	isDebug := os.Getenv("LOG_LEVEL") == "debug"
+
 	if !reachable {
 		if lastPrometheusReachable {
 			fmt.Printf("Warning: Prometheus at %s is unreachable. Falling back to Kubelet.\n", promURL)
 			lastPrometheusReachable = false
+		}
+		if isDebug {
+			fmt.Printf("Debug: Prometheus unreachable at %s\n", promURL)
 		}
 		return nil
 	}
@@ -49,6 +55,9 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 	// 2. Get Containers from Spec
 	podSpec, found, _ := unstructured.NestedMap(workload.Object, "spec", "template", "spec")
 	if !found {
+		if isDebug {
+			fmt.Printf("Debug: No pod spec found for %s/%s\n", ns, name)
+		}
 		return nil
 	}
 	containersSpec, _, _ := unstructured.NestedSlice(podSpec, "containers")
@@ -63,9 +72,9 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 		creationTime, err := time.Parse(time.RFC3339, creationTsStr)
 		if err == nil {
 			age := time.Since(creationTime)
-			// Ensure we have at least some window, say 1h
-			if age < time.Hour {
-				age = time.Hour
+			// Ensure we have at least some window, say 2m
+			if age < 2*time.Minute {
+				age = 2 * time.Minute
 			}
 			// Round to nearest hour for cleaner queries
 			hours := int(age.Hours()) + 1
@@ -76,6 +85,9 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 	// 4. Get Labels for Selector and List Pods
 	selectorMap, found, _ := unstructured.NestedStringMap(workload.Object, "spec", "selector", "matchLabels")
 	if !found || len(selectorMap) == 0 {
+		if isDebug {
+			fmt.Printf("Debug: No selector labels for %s/%s\n", ns, name)
+		}
 		return nil
 	}
 
@@ -93,6 +105,9 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 		return nil
 	}
 	if len(podList.Items) == 0 {
+		if isDebug {
+			fmt.Printf("Debug: No pods found for %s/%s using selector %s\n", ns, name, selectorStr)
+		}
 		// No active pods, can't reliably determine metric series names without external labeling logic
 		return nil
 	}
@@ -103,6 +118,10 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 	}
 	// Create regex for pod names: (pod1|pod2|...)
 	podRegex := strings.Join(podNames, "|")
+
+	if isDebug {
+		fmt.Printf("Debug: Querying Prometheus for %s/%s. Range: %s. Pods: %s\n", ns, name, rangeStr, podRegex)
+	}
 
 	var results []*SuggestionResult
 
@@ -131,6 +150,8 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 		if err != nil {
 			if !strings.Contains(err.Error(), "no data found") {
 				fmt.Printf("Prometheus CPU query failed for %s: %v. Query: %s\n", containerName, err, cpuQuery)
+			} else if isDebug {
+				fmt.Printf("Debug: No CPU data for %s. Query: %s\n", containerName, cpuQuery)
 			}
 			continue
 		}
@@ -139,6 +160,8 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 		if err != nil {
 			if !strings.Contains(err.Error(), "no data found") {
 				fmt.Printf("Prometheus Memory query failed for %s: %v. Query: %s\n", containerName, err, memQuery)
+			} else if isDebug {
+				fmt.Printf("Debug: No Memory data for %s. Query: %s\n", containerName, memQuery)
 			}
 			continue
 		}
@@ -154,6 +177,9 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 	}
 
 	if len(results) == 0 {
+		if isDebug {
+			fmt.Printf("Debug: No suggestion results generated for %s/%s (Prometheus returned nil, falling back)\n", ns, name)
+		}
 		return nil
 	}
 	return results

@@ -1,100 +1,123 @@
-# Kube Resource Suggest
+# Kube Resource Suggest (KRS)
 
-**Intelligent Resource Optimization Controller for Kubernetes**
+![CI Status](https://github.com/joe-l-mathew/kube-resource-suggest/actions/workflows/release.yaml/badge.svg)
 
-`kube-resource-suggest` is a lightweight, safe, and native Kubernetes controller that scans your workloads (Deployments, StatefulSets, DaemonSets) and recommends optimized resource requests and limits based on actual usage metrics.
+**Intelligent, Hybrid Resource Optimization for Kubernetes**
 
-## Key Features
+`kube-resource-suggest` (KRS) is a lightweight controller that automatically analyzes your workloads (Deployments, StatefulSets, DaemonSets) and recommends optimized `requests` and `limits`.
 
--   **Hybrid Intelligence**: Intelligently switches between **Prometheus** (for long-term historical accuracy via P95/Max over time) and **Kubelet/cAdvisor** (for real-time fallback) to ensure recommendations are always available without extra dependencies.
--   **Structure Awareness**: Understands complex Pod structures including sidecars and init containers.
--   **Safety First**: Operates in a read-only mode regarding your workloads. It produces `ResourceSuggestion` Custom Resources (CRs) but never modifies your deployments directly, adhering to GitOps principles.
--   **Status Reporting**: Automatically classifies workloads as `Overprovisioned`, `Underprovisioned`, or `Optimal`, allowing for easy filtering and prioritization.
+It is **Suggestion-First** and **GitOps-Safe**: it never modifies your workloads directly. Instead, it produces `ResourceSuggestion` objects that you can review and apply to your YAML manifests.
 
-## Sample Output
+---
 
-Recommendations appear as native Kubernetes objects.
+## 📊 Comparison
 
+| Feature | Kube Resource Suggest (KRS) | Vertical Pod Autoscaler (VPA) | CLI Tools (e.g. KRR) |
+| :--- | :--- | :--- | :--- |
+| **Methodology** | **Hybrid** (Prometheus + Kubelet) | Metrics Server (Input) | Prometheus Only |
+| **Safety** | **100% Safe** (ReadOnly CRDs) | Can restart pods (in Auto mode) | Safe (Read Only) |
+| **Dependencies** | **None** (Self-reliant) | Metrics Server | Prometheus |
+| **Real-time?** | **Yes** (via Kubelet Fallback) | Yes | No (Snapshot) |
+| **Installation** | **1 Helm Chart** | Complex (VPA + Updater + Hooks) | Binary / Brew |
+
+---
+
+## 🚀 Quick Start (Helm)
+
+The recommended way to install KRS is via Helm.
+
+### 1. Install Custom Resource Definitions (CRDs)
+Helm does not upgrade CRDs automatically, so apply them first:
+```bash
+kubectl apply -f charts/kube-resource-suggest/crds/crd.yaml
+```
+
+### 2. Install the Controller
+```bash
+helm upgrade --install krs ./charts/kube-resource-suggest \
+  --namespace krs-system \
+  --create-namespace
+```
+
+### 3. Check Suggestions
+Within seconds, suggestions will start appearing for your running workloads:
 ```bash
 kubectl get resourcesuggestions
 ```
 
-**Output:**
-```
-NAME           TYPE          CONTAINER   CPU REQUEST   CPU LIMIT      MEM REQUEST   MEM LIMIT      STATUS             SOURCE
-demo-app       Deployment    main        100m->20m     200m->40m      512Mi->128Mi  512Mi->256Mi   Overprovisioned    Prometheus
-redis-sts-sts  StatefulSet   redis       50m->50m      Not Set->50m   1Gi->1Gi      2Gi->2Gi       Optimal            Kubelet
-worker-1       Deployment    worker      10m->150m     200m->300m     128Mi->512Mi  256Mi->1Gi     Underprovisioned   Prometheus
-```
+---
 
-## Why Kube Resource Suggest?
+## ⚙️ Configuration
 
-How does this compare to standard tools like the Vertical Pod Autoscaler (VPA) or CLI tools?
+Configure the controller via Helm `values.yaml`.
 
-| Feature | Kube Resource Suggest | Vertical Pod Autoscaler (VPA) | CLI Reports (e.g. KRR) |
-| :--- | :--- | :--- | :--- |
-| **Methodology** | **Hybrid** (Prometheus + Kubelet) | Metrics Server / Prometheus (Adapter) | Prometheus Only |
-| **Action** | **Suggestion-First** (GitOps Safe) | Auto-Updates (Can restart pods) | Static Report |
-| **Integration** | **Native CRDs** (Live State) | CRDs (Auto-updater) | PDF / CLI Output |
-| **Data Freshness** | **Historical (30d)** or Real-time | Real-time (mostly) | Snapshot / Historical |
-| **Dependencies** | **None** (Self-sufficient) | Metrics Server | Prometheus |
-
-## Installation & Usage
-
-### Prerequisites
--   A Kubernetes cluster
--   (Optional) Prometheus for historical accuracy
-
-### 1. Install CRDs
-Register the custom resource definitions.
-
-```bash
-kubectl apply -f deploy/crd/crd.yaml
-```
-
-### 2. (Optional) Install Lightweight Prometheus
-If you don't have an existing Prometheus, you can deploy a lightweight instance pre-configured to scrape cAdvisor metrics for this controller.
-
-```bash
-kubectl apply -f deploy/prometheus/prometheus.yaml
-```
-
-### 3. Deploy Controller
-You can run the controller in-cluster using the provided manifest.
-
-```bash
-kubectl apply -f deploy/controller.yaml
-```
-
-### Configuration
-The controller can be configured via Environment Variables in the Deployment:
-
-| Variable | Description | Default |
+| Parameter | Description | Default |
 | :--- | :--- | :--- |
-| `PROMETHEUS_URL` | URL of the Prometheus service to query. | `http://krs-prometheus-svc:9090` |
-| `LOG_LEVEL` | Logging verbosity (`info` or `debug`). | `info` |
+| `logLevel` | Logging verbosity (`info` or `debug`) | `info` |
+| `image.tag` | Controller version | `latest` |
+| `prometheus.url` | External Prometheus URL (e.g., `http://prom:9090`) | `""` |
+| `prometheus.enabled` | Deploy an embedded Prometheus instance | `false` |
+| `resources.requests.cpu` | CPU request for the controller | `50m` |
 
-### Local Development / Running Locally
-You can run the controller locally against your current kubecontext.
+### Installing with Embedded Prometheus
+If you don't have a monitoring stack, KRS can bundle a lightweight Prometheus for you:
+```bash
+helm install krs ./charts/kube-resource-suggest \
+  --set prometheus.enabled=true \
+  --set prometheus.persistence.size=5Gi \
+  -n krs-system
+```
 
-1.  **Build**:
-    ```bash
-    go build -o kube-suggest ./cmd/controller/
-    ```
+---
 
-2.  **Run**:
-    ```bash
-    # Ensure you are connected to the correct cluster
-    ./kube-suggest
-    ```
+## 🧠 How It Works (The Hybrid Engine)
 
-    *Note: When running locally, if Prometheus is inside the cluster, you may need to port-forward or set PROMETHEUS_URL to nil to force Kubelet fallback.*
+KRS uses a unique **Two-Stage** approach to ensure you always get a recommendation, regardless of your cluster's observability state.
 
-## How Logic Works
+### Stage 1: Prometheus (Historical Intelligence)
+*   **State**: Active when a valid `PROMETHEUS_URL` is configured and reachable.
+*   **Method**: Queries historical metrics to find the **Maximum Usage** (Peak) over the workload's lifetime.
+*   **Logic**:
+    *   **Dynamic Lookback**: It calculates the age of your workload (`Now - CreationTimestamp`).
+    *   **Minimum Window**: Is defaults to a **2 minute** minimum to ensure data stability.
+    *   **Long-Term**: As your workload ages, the window expands (up to **30 days**), capturing weekly or monthly spikes.
+*   **Benefit**: Safe, conservative recommendations based on true historical peaks.
 
-1.  **Prometheus Check**: The controller attempts to reach the configured `PROMETHEUS_URL`.
-2.  **Historical Analysis**: If reachable, it queries for the maximum usage over the last **30 days** (default window). This provides a safe, conservative recommendation that accounts for traffic spikes.
-    *   *Formula*: `Max(Rate(CPU)[5m])` over 30d * 1.2 Buffer
-3.  **Fallback**: If Prometheus is unreachable, it falls back to **Direct Kubelet Queries**. It reads the usage statistics directly from the Kubelet Summary API (`/stats/summary`) on the nodes where your pods are running.
-    *   This removes the need for `metrics-server`.
-4.  **Recommendation**: It compares accurate usage data against valid Requests/Limits and generates a `ResourceSuggestion` CR.
+### Stage 2: Kubelet Direct (Real-Time Fallback)
+*   **State**: Active when Prometheus is unreachable or not configured.
+*   **Method**: Queries the **Kubelet Summary API** (`/stats/summary`) on the nodes where your pods are running.
+*   **Logic**:
+    *   Directly reads the real-time usage (snapshot) from the node.
+    *   Aggregates usage across all replicas.
+*   **Benefit**: No external dependencies (`metrics-server` is NOT required). Instant feedback for new clusters.
+
+### Switching Logic
+The controller checks Prometheus availability on every tick.
+1.  **Prometheus UP**: Uses 30d (or age-based) Peak data.
+2.  **Prometheus DOWN**: Falls back immediately to Kubelet real-time data.
+
+---
+
+## 🔍 Sample Output
+
+```text
+NAME           TYPE          CONTAINER   CPU REQUEST   CPU LIMIT      MEM REQUEST   MEM LIMIT      STATUS             SOURCE
+backend-api    Deployment    api         100m->20m     200m->40m      512Mi->128Mi  512Mi->256Mi   Overprovisioned    Prometheus
+redis-cache    StatefulSet   redis       50m->50m      100m->100m     1Gi->1Gi      2Gi->2Gi       Optimal            Kubelet
+job-worker     Deployment    worker      10m->150m     200m->300m     128Mi->512Mi  256Mi->1Gi     Underprovisioned   Prometheus
+```
+
+---
+
+## 🛠️ Local Development
+
+1.  **Clone**: `git clone https://github.com/joe-l-mathew/kube-resource-suggest.git`
+2.  **Build**: `make build`
+3.  **Run**: `make run` (Requires `~/.kube/config`)
+4.  **Docker**: `make docker-build`
+
+---
+
+## License
+
+MIT

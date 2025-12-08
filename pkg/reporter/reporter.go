@@ -113,7 +113,7 @@ func UpdateOrReport(client dynamic.Interface, workload unstructured.Unstructured
 
 func isSpecEqual(oldSpec, newSpec map[string]interface{}) bool {
 	// Compare key fields
-	keys := []string{"cpuRequest", "cpuLimit", "memoryRequest", "memoryLimit", "status"}
+	keys := []string{"cpuRequest", "cpuLimit", "memoryRequest", "memoryLimit", "status", "source"}
 	for _, k := range keys {
 		v1 := fmt.Sprintf("%v", oldSpec[k])
 		v2 := fmt.Sprintf("%v", newSpec[k])
