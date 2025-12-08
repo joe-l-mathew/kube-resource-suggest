@@ -39,5 +39,5 @@ jobs:
       - name: Push Chart to OCI
         run: |
           # Finds the .tgz file created by helm package
-          CHART_FILE=$(ls kube-resource-suggest-*.tgz)
+          CHART_FILE=$(ls krs-*.tgz)
           helm push $CHART_FILE oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
