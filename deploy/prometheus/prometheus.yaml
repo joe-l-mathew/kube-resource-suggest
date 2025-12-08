@@ -2,20 +2,20 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ops-tools-monitoring
+  name: krs-monitoring
 
 ---
 # 2. RBAC
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: ops-tools-prom-sa
-  namespace: ops-tools-monitoring
+  name: krs-prom-sa
+  namespace: krs-monitoring
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: ops-tools-prom-role
+  name: krs-prom-role
 rules:
 - apiGroups: [""]
   resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
@@ -24,14 +24,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ops-tools-prom-binding
+  name: krs-prom-binding
 subjects:
 - kind: ServiceAccount
-  name: ops-tools-prom-sa
-  namespace: ops-tools-monitoring
+  name: krs-prom-sa
+  namespace: krs-monitoring
 roleRef:
   kind: ClusterRole
-  name: ops-tools-prom-role
+  name: krs-prom-role
   apiGroup: rbac.authorization.k8s.io
 
 ---
@@ -39,8 +39,8 @@ roleRef:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: ops-tools-prom-config
-  namespace: ops-tools-monitoring
+  name: krs-prom-config
+  namespace: krs-monitoring
 data:
   prometheus.yml: |
     global:
@@ -84,8 +84,8 @@ data:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: ops-tools-prom-pvc
-  namespace: ops-tools-monitoring
+  name: krs-prom-pvc
+  namespace: krs-monitoring
 spec:
   accessModes:
     - ReadWriteOnce
@@ -99,19 +99,19 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ops-tools-prometheus
-  namespace: ops-tools-monitoring
+  name: krs-prometheus
+  namespace: krs-monitoring
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ops-tools-prometheus
+      app: krs-prometheus
   template:
     metadata:
       labels:
-        app: ops-tools-prometheus
+        app: krs-prometheus
     spec:
-      serviceAccountName: ops-tools-prom-sa
+      serviceAccountName: krs-prom-sa
       # Fix permissions for PVC volume (Prometheus runs as nobody/65534 often)
       securityContext:
         fsGroup: 65534
@@ -141,21 +141,21 @@ spec:
       volumes:
         - name: config-volume
           configMap:
-            name: ops-tools-prom-config
+            name: krs-prom-config
         - name: storage-volume
           persistentVolumeClaim:
-            claimName: ops-tools-prom-pvc  # References the PVC above
+            claimName: krs-prom-pvc  # References the PVC above
 
 ---
 # 6. Service
 apiVersion: v1
 kind: Service
 metadata:
-  name: ops-tools-prometheus-svc
-  namespace: ops-tools-monitoring
+  name: krs-prometheus-svc
+  namespace: krs-monitoring
 spec:
   selector:
-    app: ops-tools-prometheus
+    app: krs-prometheus
   ports:
     - port: 9090
       targetPort: 9090
