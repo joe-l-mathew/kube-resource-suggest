@@ -33,7 +33,7 @@ kubectl apply -f https://raw.githubusercontent.com/joe-l-mathew/kube-resource-su
 
 ### 2. Install Controller
 **Option A: Standard Install (No Dependencies)**
-Uses Kubelet metrics by default. Perfect for testing or clusters without Prometheus.
+Uses Kubelet metrics by default. Perfect for testing or clusters without Prometheus.(Don't use in production)
 ```bash
 helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
   --version 0.1.1 \
