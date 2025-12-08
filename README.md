@@ -8,6 +8,13 @@
 
 It is **Suggestion-First** and **GitOps-Safe**: it never modifies your workloads directly. Instead, it produces `ResourceSuggestion` objects that you can review and apply to your YAML manifests.
 
+## 🔍 Example Output
+```text
+NAME           TYPE          CONTAINER   CPU REQUEST   CPU LIMIT      MEM REQUEST   MEM LIMIT      STATUS             SOURCE
+backend-api    Deployment    api         100m->20m     200m->40m      512Mi->128Mi  512Mi->256Mi   Overprovisioned    Prometheus
+redis-cache    StatefulSet   redis       50m->50m      100m->100m     1Gi->1Gi      2Gi->2Gi       Optimal            Kubelet
+```
+
 ---
 
 ## 📊 Comparison
@@ -60,13 +67,7 @@ helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
 ```
 
 ### 3. Check Suggestions
-```bash
 kubectl get resourcesuggestions
-
-# Sample Output
-NAME           TYPE          CONTAINER   CPU REQUEST   CPU LIMIT      MEM REQUEST   MEM LIMIT      STATUS             SOURCE
-backend-api    Deployment    api         100m->20m     200m->40m      512Mi->128Mi  512Mi->256Mi   Overprovisioned    Prometheus
-redis-cache    StatefulSet   redis       50m->50m      100m->100m     1Gi->1Gi      2Gi->2Gi       Optimal            Kubelet
 ```
 
 ---
