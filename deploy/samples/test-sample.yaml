@@ -1,4 +1,4 @@
-apiVersion: ops-tools.io/v1alpha1
+apiVersion: suggester.krs.io/v1alpha1
 kind: ResourceSuggestion
 metadata:
   name: example-suggestion-1
@@ -14,7 +14,7 @@ spec:
   status: "Pending"
 
 ---
-apiVersion: ops-tools.io/v1alpha1
+apiVersion: suggester.krs.io/v1alpha1
 kind: ResourceSuggestion
 metadata:
   name: email-worker-suggestion-2

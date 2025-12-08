@@ -3,7 +3,6 @@ package reporter
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/joe-l-mathew/kube-resource-suggest/pkg/engine"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,13 +12,13 @@ import (
 )
 
 var suggestionGVR = schema.GroupVersionResource{
-	Group:    "ops-tools.io",
+	Group:    "suggester.krs.io",
 	Version:  "v1alpha1",
 	Resource: "resourcesuggestions",
 }
 
-// UpdateOrReport creates or updates a ResourceSuggestion CR
-func UpdateOrReport(client dynamic.Interface, workload unstructured.Unstructured, suggestion *engine.SuggestionResult) error {
+// UpdateOrReport creates or updates a ResourceSuggestion CR. Returns true if a change was made.
+func UpdateOrReport(client dynamic.Interface, workload unstructured.Unstructured, suggestion *engine.SuggestionResult) (bool, error) {
 	ctx := context.TODO()
 	// Custom Naming Logic
 	baseName := suggestion.WorkloadName
@@ -48,10 +47,22 @@ func UpdateOrReport(client dynamic.Interface, workload unstructured.Unstructured
 		Controller: func() *bool { b := true; return &b }(),
 	}
 
-	// 2. Define the Suggestion Object
+	// 2. Define the Suggestion Spec Map
+	newSpec := map[string]interface{}{
+		"workloadType":  suggestion.WorkloadType,
+		"containerName": suggestion.ContainerName,
+		"podCount":      suggestion.PodCount,
+		"cpuRequest":    suggestion.CpuRequest,
+		"cpuLimit":      suggestion.CpuLimit,
+		"memoryRequest": suggestion.MemoryRequest,
+		"memoryLimit":   suggestion.MemoryLimit,
+		"status":        suggestion.Status,
+		"source":        suggestion.Source,
+	}
+
 	suggestionObj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "ops-tools.io/v1alpha1",
+			"apiVersion": "suggester.krs.io/v1alpha1",
 			"kind":       "ResourceSuggestion",
 			"metadata": map[string]interface{}{
 				"name":      name,
@@ -66,46 +77,49 @@ func UpdateOrReport(client dynamic.Interface, workload unstructured.Unstructured
 					},
 				},
 			},
-			"spec": map[string]interface{}{
-				"workloadType":  suggestion.WorkloadType,
-				"containerName": suggestion.ContainerName,
-				"podCount":      suggestion.PodCount,
-				"cpuRequest":    suggestion.CpuRequest,
-				"cpuLimit":      suggestion.CpuLimit,
-				"memoryRequest": suggestion.MemoryRequest,
-				"memoryLimit":   suggestion.MemoryLimit,
-				"status":        suggestion.Status,
-				"source":        suggestion.Source,
-				"lastUpdated":   time.Now().Format(time.RFC3339),
-			},
+			"spec": newSpec,
 		},
 	}
 
 	// 3. Check if exists
-	_, err := client.Resource(suggestionGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	existing, err := client.Resource(suggestionGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if err == nil {
 		// UPDATE
-		// In real world, we should use ResourceVersion to avoid conflicts,
-		// but for now we Overwrite (Get -> Set ResourceVersion -> Update)
-		// Or simpler: Just Update if we don't care about race conditions in this basic bot
 
-		// To be safe, let's fetch the existing one to get ResourceVersion (though we just did Get, we need the object)
-		existing, _ := client.Resource(suggestionGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		// Check for changes to avoid noise
+		existingSpec, found, _ := unstructured.NestedMap(existing.Object, "spec")
+		if found {
+			if isSpecEqual(existingSpec, newSpec) {
+				return false, nil // No change
+			}
+		}
+
 		suggestionObj.SetResourceVersion(existing.GetResourceVersion())
 
 		_, err = client.Resource(suggestionGVR).Namespace(ns).Update(ctx, suggestionObj, metav1.UpdateOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to update suggestion: %v", err)
+			return false, fmt.Errorf("failed to update suggestion: %v", err)
 		}
-		// fmt.Printf("Updated resource suggestion: %s\n", name)
+		return true, nil
 	} else {
 		// CREATE
 		_, err = client.Resource(suggestionGVR).Namespace(ns).Create(ctx, suggestionObj, metav1.CreateOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to create suggestion: %v", err)
+			return false, fmt.Errorf("failed to create suggestion: %v", err)
 		}
-		// fmt.Printf("Created resource suggestion: %s\n", name)
+		return true, nil
 	}
+}
 
-	return nil
+func isSpecEqual(oldSpec, newSpec map[string]interface{}) bool {
+	// Compare key fields
+	keys := []string{"cpuRequest", "cpuLimit", "memoryRequest", "memoryLimit", "status"}
+	for _, k := range keys {
+		v1 := fmt.Sprintf("%v", oldSpec[k])
+		v2 := fmt.Sprintf("%v", newSpec[k])
+		if v1 != v2 {
+			return false
+		}
+	}
+	return true
 }

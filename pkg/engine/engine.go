@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -34,8 +35,20 @@ type SuggestionResult struct {
 	Source          string
 }
 
-// GenerateLogic returns a list of suggestions, one per container
+// GenerateLogic is the main entry point
 func GenerateLogic(client dynamic.Interface, workload unstructured.Unstructured) []*SuggestionResult {
+	// 1. Try Prometheus
+	promResults := GeneratePrometheusSuggestions(client, workload)
+	if promResults != nil {
+		return promResults
+	}
+
+	// 2. Fallback to Metrics Server
+	return GenerateMetricsServerSuggestions(client, workload)
+}
+
+// GenerateMetricsServerSuggestions returns a list of suggestions using K8s Metrics Server
+func GenerateMetricsServerSuggestions(client dynamic.Interface, workload unstructured.Unstructured) []*SuggestionResult {
 	name := workload.GetName()
 	ns := workload.GetNamespace()
 	kind := workload.GetKind()
@@ -60,7 +73,7 @@ func GenerateLogic(client dynamic.Interface, workload unstructured.Unstructured)
 	}
 	podCount := int64(len(metricsList.Items))
 
-	// 3. Get Containers from Workload Spec to iterate deterministically
+	// 3. Get Containers from Workload Spec
 	podSpec, found, _ := unstructured.NestedMap(workload.Object, "spec", "template", "spec")
 	if !found {
 		return nil
@@ -97,118 +110,151 @@ func GenerateLogic(client dynamic.Interface, workload unstructured.Unstructured)
 		avgCpu := totalCpuUsage / podCount
 		avgMem := totalMemUsage / podCount
 
-		// 5. Get Current Requests/Limits from Spec
-		var currentCpuReqNano, currentCpuLimNano, currentMemReqBytes, currentMemLimBytes int64
-		var hasCpuLimit, hasMemLimit bool
-
-		resources, _, _ := unstructured.NestedMap(cMap, "resources")
-		requests, _, _ := unstructured.NestedMap(resources, "requests")
-		limits, _, _ := unstructured.NestedMap(resources, "limits")
-
-		if requests != nil {
-			currentCpuReqNano = parseCpuToNano(fmt.Sprintf("%v", requests["cpu"]))
-			currentMemReqBytes = parseMemoryToBytes(fmt.Sprintf("%v", requests["memory"]))
-		}
-		if limits != nil {
-			if val, ok := limits["cpu"]; ok {
-				currentCpuLimNano = parseCpuToNano(fmt.Sprintf("%v", val))
-				hasCpuLimit = true
-			}
-			if val, ok := limits["memory"]; ok {
-				currentMemLimBytes = parseMemoryToBytes(fmt.Sprintf("%v", val))
-				hasMemLimit = true
-			}
-		}
-
-		// 6. Calculate Recommended
-		recommendedCpuNano := float64(avgCpu) * 1.2
-		recommendedMemBytes := float64(avgMem) * 1.2
-
-		const MinCpuMilli = 30
-		const MinMemMi = 50
-		if recommendedCpuNano < float64(MinCpuMilli*1000000) {
-			recommendedCpuNano = float64(MinCpuMilli * 1000000)
-		}
-		if recommendedMemBytes < float64(MinMemMi*1024*1024) {
-			recommendedMemBytes = float64(MinMemMi * 1024 * 1024)
-		}
-
-		targetCpuReqNano := int64(recommendedCpuNano)
-		targetMemReqBytes := int64(recommendedMemBytes)
-
-		// 7. Calculate Limits
-		var targetCpuLimNano, targetMemLimBytes int64
-		if hasCpuLimit && currentCpuReqNano > 0 {
-			ratio := float64(currentCpuLimNano) / float64(currentCpuReqNano)
-			targetCpuLimNano = int64(float64(targetCpuReqNano) * ratio)
-		} else {
-			// If no limit exists, default to the suggested Request (Guaranteed QoS)
-			targetCpuLimNano = targetCpuReqNano
-		}
-
-		if hasMemLimit && currentMemReqBytes > 0 {
-			ratio := float64(currentMemLimBytes) / float64(currentMemReqBytes)
-			targetMemLimBytes = int64(float64(targetMemReqBytes) * ratio)
-		} else {
-			targetMemLimBytes = targetMemReqBytes
-		}
-
-		// 8. Determine Status
-		status := "Optimal"
-
-		// Note: comparing against 0 (missing) will usually trigger Underprovisioned if target > 0
-		cpuUp := targetCpuReqNano > currentCpuReqNano
-		memUp := targetMemReqBytes > currentMemReqBytes
-		cpuDown := targetCpuReqNano < currentCpuReqNano
-		memDown := targetMemReqBytes < currentMemReqBytes
-
-		if cpuUp || memUp {
-			status = "Underprovisioned"
-		} else if cpuDown && memDown {
-			status = "Overprovisioned"
-		} else if cpuDown || memDown {
-			status = "Overprovisioned" // Mixed
-		}
-
-		// 9. Format Strings
-		fmtCpu := func(nano int64) string {
-			if nano == 0 {
-				return "0m (Not Set)"
-			}
-			return fmt.Sprintf("%dm", nano/1000000)
-		}
-		fmtMem := func(bytes int64) string {
-			if bytes == 0 {
-				return "0Mi (Not Set)"
-			}
-			return fmt.Sprintf("%dMi", bytes/(1024*1024))
-		}
-
-		cpuRequestStr := fmt.Sprintf("%s->%s", fmtCpu(currentCpuReqNano), fmtCpu(targetCpuReqNano))
-		memRequestStr := fmt.Sprintf("%s->%s", fmtMem(currentMemReqBytes), fmtMem(targetMemReqBytes))
-
-		var cpuLimitStr, memLimitStr string
-		// Always suggest a limit now
-		cpuLimitStr = fmt.Sprintf("%s->%s", fmtCpu(currentCpuLimNano), fmtCpu(targetCpuLimNano))
-		memLimitStr = fmt.Sprintf("%s->%s", fmtMem(currentMemLimBytes), fmtMem(targetMemLimBytes))
-
-		results = append(results, &SuggestionResult{
-			WorkloadName:    name,
-			WorkloadType:    kind,
-			ContainerName:   containerName,
-			ContainerIndex:  idx,
-			TotalContainers: totalContainers,
-			PodCount:        podCount,
-			CpuRequest:      cpuRequestStr,
-			CpuLimit:        cpuLimitStr,
-			MemoryRequest:   memRequestStr,
-			MemoryLimit:     memLimitStr,
-			Status:          status,
-			Source:          "MetricServer",
-		})
+		// Delegate to shared helper
+		res := makeSuggestion(name, kind, containerName, idx, totalContainers, podCount, float64(avgCpu), float64(avgMem), cMap, "MetricServer")
+		results = append(results, res)
 	}
 
 	return results
+}
+
+// makeSuggestion contains the core logic for calculating requests/limits and status
+func makeSuggestion(
+	workloadName, workloadType, containerName string,
+	containerIndex, totalContainers int,
+	podCount int64,
+	usageCpuNano, usageMemBytes float64,
+	containerSpec map[string]interface{},
+	source string,
+) *SuggestionResult {
+
+	// 1. Get Current Requests/Limits from Spec
+	var currentCpuReqNano, currentCpuLimNano, currentMemReqBytes, currentMemLimBytes int64
+	var hasCpuLimit, hasMemLimit bool
+
+	resources, _, _ := unstructured.NestedMap(containerSpec, "resources")
+	requests, _, _ := unstructured.NestedMap(resources, "requests")
+	limits, _, _ := unstructured.NestedMap(resources, "limits")
+
+	if requests != nil {
+		currentCpuReqNano = parseCpuToNano(fmt.Sprintf("%v", requests["cpu"]))
+		currentMemReqBytes = parseMemoryToBytes(fmt.Sprintf("%v", requests["memory"]))
+	}
+	if limits != nil {
+		if val, ok := limits["cpu"]; ok {
+			currentCpuLimNano = parseCpuToNano(fmt.Sprintf("%v", val))
+			hasCpuLimit = true
+		}
+		if val, ok := limits["memory"]; ok {
+			currentMemLimBytes = parseMemoryToBytes(fmt.Sprintf("%v", val))
+			hasMemLimit = true
+		}
+	}
+
+	// 2. Calculate Recommended
+	recommendedCpuNano := usageCpuNano * 1.2
+	recommendedMemBytes := usageMemBytes * 1.2
+
+	const MinCpuMilli = 30
+	const MinMemMi = 50
+	if recommendedCpuNano < float64(MinCpuMilli*1000000) {
+		recommendedCpuNano = float64(MinCpuMilli * 1000000)
+	}
+	if recommendedMemBytes < float64(MinMemMi*1024*1024) {
+		recommendedMemBytes = float64(MinMemMi * 1024 * 1024)
+	}
+
+	// Helper for rounding up to nearest 5
+	roundUp5 := func(val int64) int64 {
+		if val == 0 {
+			return 0
+		}
+		return (val + 4) / 5 * 5
+	}
+
+	// Helper to round nano to nearest 5m
+	roundNano := func(nano int64) int64 {
+		milli := nano / 1000000
+		return roundUp5(milli) * 1000000
+	}
+
+	// Helper to round bytes to nearest 5Mi
+	roundBytes := func(b int64) int64 {
+		mi := b / (1024 * 1024)
+		return roundUp5(mi) * 1024 * 1024
+	}
+
+	targetCpuReqNano := roundNano(int64(recommendedCpuNano))
+	targetMemReqBytes := roundBytes(int64(recommendedMemBytes))
+
+	// 3. Calculate Limits
+	var targetCpuLimNano, targetMemLimBytes int64
+	if hasCpuLimit && currentCpuReqNano > 0 {
+		ratio := float64(currentCpuLimNano) / float64(currentCpuReqNano)
+		targetCpuLimNano = roundNano(int64(float64(targetCpuReqNano) * ratio))
+	} else {
+		// If no limit exists, default to the suggested Request (Guaranteed QoS)
+		targetCpuLimNano = targetCpuReqNano
+	}
+
+	if hasMemLimit && currentMemReqBytes > 0 {
+		ratio := float64(currentMemLimBytes) / float64(currentMemReqBytes)
+		targetMemLimBytes = roundBytes(int64(float64(targetMemReqBytes) * ratio))
+	} else {
+		targetMemLimBytes = targetMemReqBytes
+	}
+
+	// 4. Determine Status
+	status := "Optimal"
+
+	cpuUp := targetCpuReqNano > currentCpuReqNano
+	memUp := targetMemReqBytes > currentMemReqBytes
+	cpuDown := targetCpuReqNano < currentCpuReqNano
+	memDown := targetMemReqBytes < currentMemReqBytes
+
+	if cpuUp || memUp {
+		status = "Underprovisioned"
+	} else if cpuDown && memDown {
+		status = "Overprovisioned"
+	} else if cpuDown || memDown {
+		status = "Overprovisioned" // Mixed
+	}
+
+	// 5. Format Strings
+	fmtCpu := func(nano int64) string {
+		if nano == 0 {
+			return "0m (Not Set)"
+		}
+		return fmt.Sprintf("%dm", nano/1000000)
+	}
+	fmtMem := func(bytes int64) string {
+		if bytes == 0 {
+			return "0Mi (Not Set)"
+		}
+		return fmt.Sprintf("%dMi", bytes/(1024*1024))
+	}
+
+	cpuRequestStr := fmt.Sprintf("%s->%s", fmtCpu(currentCpuReqNano), fmtCpu(targetCpuReqNano))
+	memRequestStr := fmt.Sprintf("%s->%s", fmtMem(currentMemReqBytes), fmtMem(targetMemReqBytes))
+
+	var cpuLimitStr, memLimitStr string
+	cpuLimitStr = fmt.Sprintf("%s->%s", fmtCpu(currentCpuLimNano), fmtCpu(targetCpuLimNano))
+	memLimitStr = fmt.Sprintf("%s->%s", fmtMem(currentMemLimBytes), fmtMem(targetMemLimBytes))
+
+	return &SuggestionResult{
+		WorkloadName:    workloadName,
+		WorkloadType:    workloadType,
+		ContainerName:   containerName,
+		ContainerIndex:  containerIndex,
+		TotalContainers: totalContainers,
+		PodCount:        podCount, // For Prometheus we might not know exact active pod count, pass 0 or filtered count
+		CpuRequest:      cpuRequestStr,
+		CpuLimit:        cpuLimitStr,
+		MemoryRequest:   memRequestStr,
+		MemoryLimit:     memLimitStr,
+		Status:          status,
+		Source:          source,
+	}
 }
 
 // --- Helpers ---
@@ -237,6 +283,14 @@ func parseCpuToNano(s string) int64 {
 		val, _ := strconv.ParseInt(strings.TrimSuffix(s, "u"), 10, 64)
 		return val * 1000
 	}
+	// Try parsing raw number (sometimes returned as plain int/float)
+	if val, err := strconv.ParseFloat(s, 64); err == nil {
+		// Assume cores if small float? Or nanos?
+		// Usually K8s quantities are stringified carefully.
+		// If s is "1", it's 1 core => 1,000,000,000n.
+		// But here we rely on standard suffixes usually.
+		return int64(val * 1e9)
+	}
 	return 0
 }
 
@@ -259,4 +313,12 @@ func parseMemoryToBytes(s string) int64 {
 		return val
 	}
 	return 0
+}
+
+func GetPrometheusUrl() string {
+	url := os.Getenv("PROMETHEUS_URL")
+	if url == "" {
+		url = "http://krs-prometheus-svc:9090"
+	}
+	return url
 }
