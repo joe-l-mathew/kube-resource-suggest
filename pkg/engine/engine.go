@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -9,17 +10,11 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 )
 
-// GVR for Metrics Server
-var metricsGVR = schema.GroupVersionResource{
-	Group:    "metrics.k8s.io",
-	Version:  "v1beta1",
-	Resource: "pods",
-}
-
+// SuggestionResult holds the recommended resources and status
 type SuggestionResult struct {
 	WorkloadName    string
 	WorkloadType    string
@@ -35,20 +30,26 @@ type SuggestionResult struct {
 	Source          string
 }
 
+// PodMetrics holds parsed metrics for a single pod
+type PodMetrics struct {
+	Containers map[string]ResourceUsage
+}
+
 // GenerateLogic is the main entry point
-func GenerateLogic(client dynamic.Interface, workload unstructured.Unstructured) []*SuggestionResult {
+
+func GenerateLogic(client dynamic.Interface, coreClient *kubernetes.Clientset, workload unstructured.Unstructured) []*SuggestionResult {
 	// 1. Try Prometheus
 	promResults := GeneratePrometheusSuggestions(client, workload)
 	if promResults != nil {
 		return promResults
 	}
 
-	// 2. Fallback to Metrics Server
-	return GenerateMetricsServerSuggestions(client, workload)
+	// 2. Fallback to Kubelet (Direct Pod Usage)
+	return GenerateKubeletSuggestions(coreClient, workload)
 }
 
-// GenerateMetricsServerSuggestions returns a list of suggestions using K8s Metrics Server
-func GenerateMetricsServerSuggestions(client dynamic.Interface, workload unstructured.Unstructured) []*SuggestionResult {
+// GenerateKubeletSuggestions returns a list of suggestions using local Kubelet Summary API
+func GenerateKubeletSuggestions(client *kubernetes.Clientset, workload unstructured.Unstructured) []*SuggestionResult {
 	name := workload.GetName()
 	ns := workload.GetNamespace()
 	kind := workload.GetKind()
@@ -60,18 +61,18 @@ func GenerateMetricsServerSuggestions(client dynamic.Interface, workload unstruc
 	}
 	selectorStr := mapToString(selectorMap)
 
-	// 2. Fetch Metrics
-	metricsList, err := client.Resource(metricsGVR).Namespace(ns).List(context.TODO(), metav1.ListOptions{
+	// 2. List Pods
+	podList, err := client.CoreV1().Pods(ns).List(context.TODO(), metav1.ListOptions{
 		LabelSelector: selectorStr,
 	})
 	if err != nil {
-		fmt.Printf("Error fetching metrics for %s: %v\n", name, err)
+		fmt.Printf("Error listing pods: %v\n", err)
 		return nil
 	}
-	if len(metricsList.Items) == 0 {
+	if len(podList.Items) == 0 {
 		return nil
 	}
-	podCount := int64(len(metricsList.Items))
+	// podCount := int64(len(podList.Items))
 
 	// 3. Get Containers from Workload Spec
 	podSpec, found, _ := unstructured.NestedMap(workload.Object, "spec", "template", "spec")
@@ -83,6 +84,32 @@ func GenerateMetricsServerSuggestions(client dynamic.Interface, workload unstruc
 
 	var results []*SuggestionResult
 
+	// Pre-fetch metrics for all pods to avoid repeated calls per container loop if possible,
+	// but simplest is to loop containers and then aggregate from pods.
+	// Actually, optimization: Fetch metrics for all pods once.
+	// Pre-fetch metrics for all pods to avoid repeated calls per container loop if possible,
+	// but simplest is to loop containers and then aggregate from pods.
+	// Actually, optimization: Fetch metrics for all pods once.
+	podMetricsMap := make(map[string]PodMetrics)
+
+	for _, p := range podList.Items {
+		if p.Status.Phase != "Running" {
+			continue
+		}
+		pm, err := getPodMetricsFromKubelet(client, p.Spec.NodeName, p.Name, p.Namespace)
+		if err == nil {
+			podMetricsMap[p.Name] = pm
+		}
+	}
+
+	if len(podMetricsMap) == 0 {
+		return nil
+	}
+	// Re-adjust pod count to successful metrics
+	// podCount = int64(len(podMetricsMap)) // Conservative: average over all found? Or all desired?
+	// Use actual responding pods for average to avoid skewing down
+	effectivePodCount := int64(len(podMetricsMap))
+
 	for idx, cInt := range containersSpec {
 		cMap, ok := cInt.(map[string]interface{})
 		if !ok {
@@ -90,32 +117,89 @@ func GenerateMetricsServerSuggestions(client dynamic.Interface, workload unstruc
 		}
 		containerName := cMap["name"].(string)
 
-		// 4. Calculate Usage for this container
 		var totalCpuUsage int64 = 0
 		var totalMemUsage int64 = 0
 
-		for _, podMetric := range metricsList.Items {
-			metricContainers, _, _ := unstructured.NestedSlice(podMetric.Object, "containers")
-			for _, mcInt := range metricContainers {
-				mc := mcInt.(map[string]interface{})
-				if mc["name"].(string) == containerName {
-					usage, _, _ := unstructured.NestedMap(mc, "usage")
-					totalCpuUsage += parseCpuToNano(fmt.Sprintf("%v", usage["cpu"]))
-					totalMemUsage += parseMemoryToBytes(fmt.Sprintf("%v", usage["memory"]))
-					break
-				}
+		for _, pm := range podMetricsMap {
+			if usage, ok := pm.Containers[containerName]; ok {
+				totalCpuUsage += usage.CpuNano
+				totalMemUsage += usage.MemBytes
 			}
 		}
 
-		avgCpu := totalCpuUsage / podCount
-		avgMem := totalMemUsage / podCount
+		avgCpu := totalCpuUsage / effectivePodCount
+		avgMem := totalMemUsage / effectivePodCount
 
 		// Delegate to shared helper
-		res := makeSuggestion(name, kind, containerName, idx, totalContainers, podCount, float64(avgCpu), float64(avgMem), cMap, "MetricServer")
+		res := makeSuggestion(name, kind, containerName, idx, totalContainers, effectivePodCount, float64(avgCpu), float64(avgMem), cMap, "Kubelet")
 		results = append(results, res)
 	}
 
 	return results
+}
+
+type ResourceUsage struct {
+	CpuNano  int64
+	MemBytes int64
+}
+
+// getPodMetricsFromKubelet queries the Node's summary API via APIServer proxy
+func getPodMetricsFromKubelet(client *kubernetes.Clientset, nodeName, podName, namespace string) (PodMetrics, error) {
+	// Path: /api/v1/nodes/{node}/proxy/stats/summary
+	// Check if this node is reachable? We just try.
+	// We need to decode the Summary JSON.
+
+	// Minimal struct for JSON parsing
+	type Summary struct {
+		Pods []struct {
+			PodRef struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"podRef"`
+			Containers []struct {
+				Name string `json:"name"`
+				CPU  struct {
+					UsageNanoCores uint64 `json:"usageNanoCores"`
+				} `json:"cpu"`
+				Memory struct {
+					WorkingSetBytes uint64 `json:"workingSetBytes"`
+				} `json:"memory"`
+			} `json:"containers"`
+		} `json:"pods"`
+	}
+
+	data, err := client.CoreV1().RESTClient().Get().
+		Resource("nodes").
+		Name(nodeName).
+		SubResource("proxy").
+		Suffix("stats/summary").
+		Do(context.TODO()).
+		Raw()
+
+	if err != nil {
+		return PodMetrics{}, err
+	}
+
+	var s Summary
+	if err := json.Unmarshal(data, &s); err != nil {
+		return PodMetrics{}, err
+	}
+
+	pm := PodMetrics{Containers: make(map[string]ResourceUsage)}
+
+	for _, p := range s.Pods {
+		if p.PodRef.Name == podName && p.PodRef.Namespace == namespace {
+			for _, c := range p.Containers {
+				pm.Containers[c.Name] = ResourceUsage{
+					CpuNano:  int64(c.CPU.UsageNanoCores),
+					MemBytes: int64(c.Memory.WorkingSetBytes),
+				}
+			}
+			return pm, nil
+		}
+	}
+
+	return PodMetrics{}, fmt.Errorf("pod not found in node summary")
 }
 
 // makeSuggestion contains the core logic for calculating requests/limits and status

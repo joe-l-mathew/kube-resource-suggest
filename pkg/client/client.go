@@ -6,25 +6,32 @@ import (
 	"path/filepath"
 
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
 
-// Connect returns a dynamic client interface.
-func Connect() (dynamic.Interface, error) {
+// Connect returns a dynamic client interface and a core clientset.
+func Connect() (dynamic.Interface, *kubernetes.Clientset, error) {
 	config, err := getClientConfig()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get k8s config: %w", err)
+		return nil, nil, fmt.Errorf("failed to get k8s config: %w", err)
 	}
 
 	// Dynamic Client is used for Custom Resources (CRDs)
 	dynClient, err := dynamic.NewForConfig(config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
+		return nil, nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
-	return dynClient, nil
+	// Core Client is used for Nodes/Proxy (Kubelet API)
+	coreClient, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create core client: %w", err)
+	}
+
+	return dynClient, coreClient, nil
 }
 
 // getClientConfig tries InClusterConfig first, then falls back to ~/.kube/config

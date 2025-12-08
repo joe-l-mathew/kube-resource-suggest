@@ -11,7 +11,7 @@ metadata:
 rules:
   # 1. Read Workloads
   - apiGroups: ["", "apps"]
-    resources: ["pods", "deployments", "statefulsets", "daemonsets", "nodes"]
+    resources: ["pods", "deployments", "statefulsets", "daemonsets", "nodes", "nodes/proxy"]
     verbs: ["get", "list", "watch"]
   # 2. Manage Custom Resources
   - apiGroups: ["suggester.krs.io"]

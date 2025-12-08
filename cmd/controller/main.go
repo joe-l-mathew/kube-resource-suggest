@@ -15,6 +15,7 @@ import (
 	"github.com/joe-l-mathew/kube-resource-suggest/pkg/scanner"
 
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 )
 
 var Version = "dev"
@@ -26,7 +27,8 @@ func main() {
 	fmt.Println("==================================================")
 
 	// 1. Connect
-	k8sClient, err := client.Connect()
+	// 1. Connect
+	k8sClient, coreClient, err := client.Connect()
 	if err != nil {
 		log.Fatalf("Error connecting to Kubernetes: %v", err)
 	}
@@ -58,7 +60,7 @@ func main() {
 
 		changesCount := 0
 		for _, w := range workloads {
-			changesCount += processWorkload(k8sClient, w)
+			changesCount += processWorkload(k8sClient, coreClient, w)
 		}
 
 		if changesCount > 0 {
@@ -70,8 +72,8 @@ func main() {
 	}
 }
 
-func processWorkload(k8sClient dynamic.Interface, w unstructured.Unstructured) int {
-	suggestions := engine.GenerateLogic(k8sClient, w)
+func processWorkload(k8sClient dynamic.Interface, coreClient *kubernetes.Clientset, w unstructured.Unstructured) int {
+	suggestions := engine.GenerateLogic(k8sClient, coreClient, w)
 	changes := 0
 
 	for _, suggestion := range suggestions {

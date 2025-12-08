@@ -30,7 +30,7 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 
 	if !reachable {
 		if lastPrometheusReachable {
-			fmt.Printf("Warning: Prometheus at %s is unreachable. Falling back to Metrics Server.\n", promURL)
+			fmt.Printf("Warning: Prometheus at %s is unreachable. Falling back to Kubelet.\n", promURL)
 			lastPrometheusReachable = false
 		}
 		return nil
@@ -55,10 +55,23 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 	totalContainers := len(containersSpec)
 
 	// 3. Prepare Lookback Range
-	// Default to 7 days or time since creation
-
+	// Use dynamic range based on creation timestamp
+	creationTsStr, found, _ := unstructured.NestedString(workload.Object, "metadata", "creationTimestamp")
 	rangeStr := "30d"
-	// If young, we still use 30d as Prometheus handles it.
+
+	if found && creationTsStr != "" {
+		creationTime, err := time.Parse(time.RFC3339, creationTsStr)
+		if err == nil {
+			age := time.Since(creationTime)
+			// Ensure we have at least some window, say 1h
+			if age < time.Hour {
+				age = time.Hour
+			}
+			// Round to nearest hour for cleaner queries
+			hours := int(age.Hours()) + 1
+			rangeStr = fmt.Sprintf("%dh", hours)
+		}
+	}
 
 	// 4. Get Labels for Selector and List Pods
 	selectorMap, found, _ := unstructured.NestedStringMap(workload.Object, "spec", "selector", "matchLabels")
