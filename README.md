@@ -4,8 +4,6 @@
 
 `kube-resource-suggest` is a lightweight, safe, and native Kubernetes controller that scans your workloads (Deployments, StatefulSets, DaemonSets) and recommends optimized resource requests and limits based on actual usage metrics.
 
-Unlike other tools that might restart your workloads or require complex setups, this tool works entirely via Kubernetes Custom Resources (CRs), making it perfect for GitOps workflows and safe for production environments.
-
 ## Sample Output
 
 Recommendations appear as native Kubernetes objects.

@@ -1,0 +1,161 @@
+# 1. Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ops-tools-monitoring
+
+---
+# 2. RBAC
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ops-tools-prom-sa
+  namespace: ops-tools-monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ops-tools-prom-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ops-tools-prom-binding
+subjects:
+- kind: ServiceAccount
+  name: ops-tools-prom-sa
+  namespace: ops-tools-monitoring
+roleRef:
+  kind: ClusterRole
+  name: ops-tools-prom-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# 3. ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ops-tools-prom-config
+  namespace: ops-tools-monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 30s
+      evaluation_interval: 30s
+
+    scrape_configs:
+      - job_name: 'kubernetes-pods-only'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        
+        kubernetes_sd_configs:
+        - role: node
+
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+        - target_label: __address__
+          replacement: kubernetes.default.svc:443
+        - source_labels: [__meta_kubernetes_node_name]
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+
+        metric_relabel_configs:
+        - source_labels: [__name__]
+          regex: 'container_cpu_usage_seconds_total|container_memory_working_set_bytes'
+          action: keep
+        - source_labels: [pod]
+          regex: '^$'
+          action: drop
+        - source_labels: [container]
+          regex: 'POD'
+          action: drop
+
+---
+# 4. Persistent Volume Claim (NEW)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ops-tools-prom-pvc
+  namespace: ops-tools-monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi  # 5Gi is plenty for storing just 2 metrics for 7 days
+  # storageClassName: standard # Uncomment if you need a specific class
+
+---
+# 5. Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ops-tools-prometheus
+  namespace: ops-tools-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ops-tools-prometheus
+  template:
+    metadata:
+      labels:
+        app: ops-tools-prometheus
+    spec:
+      serviceAccountName: ops-tools-prom-sa
+      # Fix permissions for PVC volume (Prometheus runs as nobody/65534 often)
+      securityContext:
+        fsGroup: 65534
+        runAsUser: 65534
+        runAsNonRoot: true
+      containers:
+      - name: prometheus
+        image: prom/prometheus:v2.45.0
+        args:
+          - "--config.file=/etc/prometheus/prometheus.yml"
+          - "--storage.tsdb.path=/prometheus"
+          - "--storage.tsdb.retention.time=7d"
+        ports:
+          - containerPort: 9090
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+          - name: config-volume
+            mountPath: /etc/prometheus/
+          - name: storage-volume
+            mountPath: /prometheus
+      volumes:
+        - name: config-volume
+          configMap:
+            name: ops-tools-prom-config
+        - name: storage-volume
+          persistentVolumeClaim:
+            claimName: ops-tools-prom-pvc  # References the PVC above
+
+---
+# 6. Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: ops-tools-prometheus-svc
+  namespace: ops-tools-monitoring
+spec:
+  selector:
+    app: ops-tools-prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
