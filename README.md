@@ -36,7 +36,6 @@ kubectl apply -f https://raw.githubusercontent.com/joe-l-mathew/kube-resource-su
 Uses Kubelet metrics by default. Perfect for testing or clusters without Prometheus.(Don't use in production)
 ```bash
 helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
-  --version 0.1.1 \
   --namespace krs-system \
   --create-namespace
 ```
@@ -45,7 +44,6 @@ helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
 Uses your existing Prometheus for historical accuracy (30d lookback).
 ```bash
 helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
-  --version 0.1.1 \
   --namespace krs-system \
   --create-namespace \
   --set prometheus.url="http://prometheus-operated.monitoring.svc:9090"
@@ -55,7 +53,6 @@ helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
 Deploys a lightweight Prometheus instance alongside the controller.
 ```bash
 helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
-  --version 0.1.1 \
   --namespace krs-system \
   --create-namespace \
   --set prometheus.enabled=true \
