@@ -51,7 +51,7 @@ spec:
       serviceAccountName: krs-controller-sa
       containers:
         - name: controller
-          image: kube-resource-suggest:v1.0.0
+          image: joelmathew357/krs:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: PROMETHEUS_URL
