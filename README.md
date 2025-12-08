@@ -22,90 +22,105 @@ It is **Suggestion-First** and **GitOps-Safe**: it never modifies your workloads
 
 ---
 
-## 🚀 Quick Start (Helm)
+## 🚀 Quick Start
 
-The recommended way to install KRS is via Helm.
+The chart is hosted on GitHub Container Registry (OCI).
 
-### 1. Install Custom Resource Definitions (CRDs)
-Helm does not upgrade CRDs automatically, so apply them first:
+### 1. Install CRDs
 ```bash
-kubectl apply -f charts/kube-resource-suggest/crds/crd.yaml
+kubectl apply -f https://raw.githubusercontent.com/joe-l-mathew/kube-resource-suggest/main/deploy/crd/crd.yaml
 ```
 
-### 2. Install the Controller
+### 2. Install Controller
+**Option A: Standard Install (No Dependencies)**
+Uses Kubelet metrics by default. Perfect for testing or clusters without Prometheus.
 ```bash
-helm upgrade --install krs ./charts/kube-resource-suggest \
+helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
+  --version 0.1.1 \
   --namespace krs-system \
   --create-namespace
 ```
 
+**Option B: Connect to Existing Prometheus**
+Uses your existing Prometheus for historical accuracy (30d lookback).
+```bash
+helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
+  --version 0.1.1 \
+  --namespace krs-system \
+  --create-namespace \
+  --set prometheus.url="http://prometheus-operated.monitoring.svc:9090"
+```
+
+**Option C: Install with Embedded Prometheus**
+Deploys a lightweight Prometheus instance alongside the controller.
+```bash
+helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
+  --version 0.1.1 \
+  --namespace krs-system \
+  --create-namespace \
+  --set prometheus.enabled=true \
+  --set prometheus.persistence.size=10Gi
+```
+
 ### 3. Check Suggestions
-Within seconds, suggestions will start appearing for your running workloads:
 ```bash
 kubectl get resourcesuggestions
+
+# Sample Output
+NAME           TYPE          CONTAINER   CPU REQUEST   CPU LIMIT      MEM REQUEST   MEM LIMIT      STATUS             SOURCE
+backend-api    Deployment    api         100m->20m     200m->40m      512Mi->128Mi  512Mi->256Mi   Overprovisioned    Prometheus
+redis-cache    StatefulSet   redis       50m->50m      100m->100m     1Gi->1Gi      2Gi->2Gi       Optimal            Kubelet
 ```
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Configuration Reference
 
-Configure the controller via Helm `values.yaml`.
+All possible configuration values for `values.yaml`.
 
 | Parameter | Description | Default |
 | :--- | :--- | :--- |
-| `logLevel` | Logging verbosity (`info` or `debug`) | `info` |
-| `image.tag` | Controller version | `latest` |
-| `prometheus.url` | External Prometheus URL (e.g., `http://prom:9090`) | `""` |
-| `prometheus.enabled` | Deploy an embedded Prometheus instance | `false` |
-| `resources.requests.cpu` | CPU request for the controller | `50m` |
-
-### Installing with Embedded Prometheus
-If you don't have a monitoring stack, KRS can bundle a lightweight Prometheus for you:
-```bash
-helm install krs ./charts/kube-resource-suggest \
-  --set prometheus.enabled=true \
-  --set prometheus.persistence.size=5Gi \
-  -n krs-system
-```
+| **Global** | | |
+| `logLevel` | Logging verbosity (`info` or `debug`). | `info` |
+| `image.repository` | Controller image repository. | `joelmathew357/krs` |
+| `image.tag` | Controller image tag. | `latest` (or chart appVersion) |
+| `image.pullPolicy` | Image pull policy. | `IfNotPresent` |
+| `imagePullSecrets` | Secrets for pulling the image. | `[]` |
+| **Resources** | | |
+| `resources.requests.cpu` | Controller CPU request. | `50m` |
+| `resources.requests.memory` | Controller Memory request. | `64Mi` |
+| `resources.limits.cpu` | Controller CPU limit. | `200m` |
+| `resources.limits.memory` | Controller Memory limit. | `256Mi` |
+| **Prometheus** | | |
+| `prometheus.url` | External Prometheus URL. If set, overrides embedded. | `""` |
+| `prometheus.enabled` | Deploy embedded Prometheus. | `false` |
+| `prometheus.persistence.enabled` | Enable PVC for embedded Prometheus. | `true` |
+| `prometheus.persistence.size` | PVC size for embedded Prometheus. | `5Gi` |
+| `prometheus.retention` | Data retention (not configurable via values yet, hardcoded). | `7d` |
+| **Security** | | |
+| `serviceAccount.create` | Create ServiceAccount. | `true` |
+| `serviceAccount.name` | Custom ServiceAccount name. | `""` |
+| `podSecurityContext` | Pod-level security context. | `{}` |
+| `securityContext` | Container-level security context. | `{}` |
 
 ---
 
 ## 🧠 How It Works (The Hybrid Engine)
 
-KRS uses a unique **Two-Stage** approach to ensure you always get a recommendation, regardless of your cluster's observability state.
+KRS uses a unique **Two-Stage** approach to ensure you always get a recommendation.
 
 ### Stage 1: Prometheus (Historical Intelligence)
-*   **State**: Active when a valid `PROMETHEUS_URL` is configured and reachable.
-*   **Method**: Queries historical metrics to find the **Maximum Usage** (Peak) over the workload's lifetime.
-*   **Logic**:
-    *   **Dynamic Lookback**: It calculates the age of your workload (`Now - CreationTimestamp`).
-    *   **Minimum Window**: Is defaults to a **2 minute** minimum to ensure data stability.
-    *   **Long-Term**: As your workload ages, the window expands (up to **30 days**), capturing weekly or monthly spikes.
-*   **Benefit**: Safe, conservative recommendations based on true historical peaks.
+*   **Active If**: `PROMETHEUS_URL` is reachable.
+*   **Logic**: Queries **Max (Peak)** usage over the last **30 days**.
+*   **Smart Range**: Uses a dynamic lookback window starting from the workload's creation time (Minimum **2 minutes**).
 
 ### Stage 2: Kubelet Direct (Real-Time Fallback)
-*   **State**: Active when Prometheus is unreachable or not configured.
-*   **Method**: Queries the **Kubelet Summary API** (`/stats/summary`) on the nodes where your pods are running.
-*   **Logic**:
-    *   Directly reads the real-time usage (snapshot) from the node.
-    *   Aggregates usage across all replicas.
-*   **Benefit**: No external dependencies (`metrics-server` is NOT required). Instant feedback for new clusters.
-
-### Switching Logic
-The controller checks Prometheus availability on every tick.
-1.  **Prometheus UP**: Uses 30d (or age-based) Peak data.
-2.  **Prometheus DOWN**: Falls back immediately to Kubelet real-time data.
+*   **Active If**: Prometheus is unreachable or unconfigured.
+*   **Logic**: Queries **Real-time** usage from the Kubelet Summary API (`/stats/summary`).
+*   **Benefit**: Zero dependencies. Works instantly on new clusters.
 
 ---
 
-## 🔍 Sample Output
-
-```text
-NAME           TYPE          CONTAINER   CPU REQUEST   CPU LIMIT      MEM REQUEST   MEM LIMIT      STATUS             SOURCE
-backend-api    Deployment    api         100m->20m     200m->40m      512Mi->128Mi  512Mi->256Mi   Overprovisioned    Prometheus
-redis-cache    StatefulSet   redis       50m->50m      100m->100m     1Gi->1Gi      2Gi->2Gi       Optimal            Kubelet
-job-worker     Deployment    worker      10m->150m     200m->300m     128Mi->512Mi  256Mi->1Gi     Underprovisioned   Prometheus
-```
 
 ---
 
@@ -113,7 +128,7 @@ job-worker     Deployment    worker      10m->150m     200m->300m     128Mi->512
 
 1.  **Clone**: `git clone https://github.com/joe-l-mathew/kube-resource-suggest.git`
 2.  **Build**: `make build`
-3.  **Run**: `make run` (Requires `~/.kube/config`)
+3.  **Run**: `make run`
 4.  **Docker**: `make docker-build`
 
 ---
