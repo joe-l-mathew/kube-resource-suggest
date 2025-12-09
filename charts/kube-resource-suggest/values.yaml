@@ -61,6 +61,7 @@ prometheus:
   enabled: false
   image:
     repository: prom/prometheus
+    pullPolicy: IfNotPresent
     tag: v2.45.0
   service:
     type: ClusterIP

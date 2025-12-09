@@ -98,7 +98,11 @@ All possible configuration values for `values.yaml`.
 | **Prometheus** | | |
 | `prometheus.url` | External Prometheus URL. If set, overrides embedded. | `""` |
 | `prometheus.enabled` | Deploy embedded Prometheus. | `false` |
+| `prometheus.image.repository` | Prometheus image repository. | `prom/prometheus` |
+| `prometheus.image.tag` | Prometheus image tag. | `v2.45.0` |
+| `prometheus.image.pullPolicy` | Prometheus image pull policy. | `IfNotPresent` |
 | `prometheus.persistence.enabled` | Enable PVC for embedded Prometheus. | `true` |
+| `prometheus.persistence.storageClass` | PVC storage class for embedded Prometheus. | `""` |
 | `prometheus.persistence.size` | PVC size for embedded Prometheus. | `5Gi` |
 | `prometheus.retention` | Data retention (not configurable via values yet, hardcoded). | `7d` |
 | **Security** | | |
