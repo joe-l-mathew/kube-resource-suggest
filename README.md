@@ -1,10 +1,13 @@
 # Kube Resource Suggest (KRS)
 
 ![CI Status](https://github.com/joe-l-mathew/kube-resource-suggest/actions/workflows/release.yaml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Intelligent, Hybrid Resource Optimization for Kubernetes**
 
 `kube-resource-suggest` (KRS) is a lightweight controller that automatically analyzes your workloads (Deployments, StatefulSets, DaemonSets) and recommends optimized `requests` and `limits`.
+
+**Zero Developer Config**: Install it once cluster-wide, and every developer immediately gets resource recommendations for their workloads without changing a single line of code.
 
 It is **Suggestion-First** and **GitOps-Safe**: it never modifies your workloads directly. Instead, it produces `ResourceSuggestion` objects that you can review and apply to your YAML manifests.
 
@@ -39,7 +42,7 @@ kubectl apply -f https://raw.githubusercontent.com/joe-l-mathew/kube-resource-su
 ```
 
 ### 2. Install Controller
-**Option A: Standard Install (No Dependencies, not recomented for production)**
+**Option A: Standard Install (No Dependencies, not recommended for production)**
 Uses Kubelet metrics by default. Perfect for testing or clusters without Prometheus.
 ```bash
 helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
@@ -81,7 +84,7 @@ All possible configuration values for `values.yaml`.
 | **Global** | | |
 | `logLevel` | Logging verbosity (`info` or `debug`). | `info` |
 | `image.repository` | Controller image repository. | `joelmathew357/krs` |
-| `image.tag` | Controller image tag. | `latest` (or chart appVersion) |
+| `image.tag` | Controller image tag. | `latest` (defaults to chart `appVersion`) |
 | `image.pullPolicy` | Image pull policy. | `IfNotPresent` |
 | `imagePullSecrets` | Secrets for pulling the image. | `[]` |
 | **Resources** | | |
@@ -128,6 +131,24 @@ KRS uses a unique **Two-Stage** approach to ensure you always get a recommendati
 2.  **Build**: `make build`
 3.  **Run**: `make run`
 4.  **Docker**: `make docker-build`
+
+---
+
+## 🗑️ Uninstall
+
+To remove the controller and clean up resources:
+
+```bash
+# 1. Uninstall Helm Chart
+helm uninstall krs -n krs-system
+
+# 2. (Optional) Delete CRDs
+# Warning: This will delete all generated suggestions!
+kubectl delete -f https://raw.githubusercontent.com/joe-l-mathew/kube-resource-suggest/main/deploy/crd/crd.yaml
+
+# 3. (Optional) Delete Namespace
+kubectl delete ns krs-system
+```
 
 ---
 
