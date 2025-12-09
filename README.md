@@ -12,6 +12,11 @@
 It is **Suggestion-First** and **GitOps-Safe**: it never modifies your workloads directly. Instead, it produces `ResourceSuggestion` objects that you can review and apply to your YAML manifests.
 
 ## 🔍 Example Output
+
+```bash
+kubectl get resourcesuggestions -n demo-app
+```
+
 ```text
 NAME           TYPE          CONTAINER   CPU REQUEST   CPU LIMIT      MEM REQUEST   MEM LIMIT      STATUS             SOURCE
 backend-api    Deployment    api         100m->20m     200m->40m      512Mi->128Mi  512Mi->256Mi   Overprovisioned    Prometheus
