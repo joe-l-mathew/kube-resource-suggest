@@ -53,6 +53,12 @@ tolerations: []
 
 affinity: {}
 
+# Optional: OpenShift Compatibility
+openshift:
+  # If true, adds the 'cluster-monitoring-view' ClusterRole to the service account.
+  # This serves as a permission required to query the OpenShift Thanos querier.
+  enabled: false
+
 # Optional: Embedded Prometheus
 prometheus:
   # If set, this external URL is used (e.g. "http://my-prom:9090")

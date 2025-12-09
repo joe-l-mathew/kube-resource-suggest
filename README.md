@@ -61,7 +61,17 @@ helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
   --set prometheus.url="http://prometheus-operated.monitoring.svc:9090"
 ```
 
-**Option C: Install with Embedded Prometheus**
+**Option C: OpenShift (Thanos)**
+Enable OpenShift mode to automatically grant permissions to query the built-in Thanos querier.
+```bash
+helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
+  --namespace krs-system \
+  --create-namespace \
+  --set openshift.enabled=true \
+  --set prometheus.url="https://thanos-querier.openshift-monitoring.svc:9091"
+```
+
+**Option D: Install with Embedded Prometheus**
 Deploys a lightweight Prometheus instance alongside the controller.
 ```bash
 helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
@@ -95,6 +105,8 @@ All possible configuration values for `values.yaml`.
 | `resources.requests.memory` | Controller Memory request. | `64Mi` |
 | `resources.limits.cpu` | Controller CPU limit. | `200m` |
 | `resources.limits.memory` | Controller Memory limit. | `256Mi` |
+| **OpenShift** | | |
+| `openshift.enabled` | Enable OpenShift-specific RBAC (ClusterMonitoringView). | `false` |
 | **Prometheus** | | |
 | `prometheus.url` | External Prometheus URL. If set, overrides embedded. | `""` |
 | `prometheus.enabled` | Deploy embedded Prometheus. | `false` |
