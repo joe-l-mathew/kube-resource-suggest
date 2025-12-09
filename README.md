@@ -14,10 +14,7 @@ It is **Suggestion-First** and **GitOps-Safe**: it never modifies your workloads
 ## 🔍 Example Output
 
 ```bash
-kubectl get resourcesuggestions -n demo-app
-```
-
-```text
+$ kubectl get resourcesuggestions -n demo-app
 NAME           TYPE          CONTAINER   CPU REQUEST   CPU LIMIT      MEM REQUEST   MEM LIMIT      STATUS             SOURCE
 backend-api    Deployment    api         100m->20m     200m->40m      512Mi->128Mi  512Mi->256Mi   Overprovisioned    Prometheus
 redis-cache    StatefulSet   redis       50m->50m      100m->100m     1Gi->1Gi      2Gi->2Gi       Optimal            Kubelet
