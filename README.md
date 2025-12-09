@@ -70,6 +70,7 @@ helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
 ```
 
 ### 3. Check Suggestions
+```bash
 kubectl get resourcesuggestions
 ```
 
