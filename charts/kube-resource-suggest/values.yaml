@@ -44,6 +44,13 @@ resources:
 # Application Configuration
 logLevel: "info"
 
+# Controller Performance Configuration
+config:
+  # Interval between full cluster scans
+  interval: "1h"
+  # Delay between processing each workload to prevent API throttling
+  batchDelay: "250ms"
+
 # Additional Environment Variables
 env: []
 

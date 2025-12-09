@@ -105,6 +105,9 @@ All possible configuration values for `values.yaml`.
 | `resources.requests.memory` | Controller Memory request. | `64Mi` |
 | `resources.limits.cpu` | Controller CPU limit. | `200m` |
 | `resources.limits.memory` | Controller Memory limit. | `256Mi` |
+| **Performance** | | |
+| `config.interval` | Duration between full cluster scans. | `1h` |
+| `config.batchDelay` | Delay between processing each workload (rate limiting). | `250ms` |
 | **OpenShift** | | |
 | `openshift.enabled` | Enable OpenShift-specific RBAC (ClusterMonitoringView). | `false` |
 | **Prometheus** | | |
