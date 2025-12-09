@@ -7,7 +7,7 @@
 
 `kube-resource-suggest` (KRS) is a lightweight controller that automatically analyzes your workloads (Deployments, StatefulSets, DaemonSets) and recommends optimized `requests` and `limits`.
 
-**Zero Developer Config**: Install it once cluster-wide, and every developer immediately gets resource recommendations for their workloads without changing a single line of code.
+**Zero Developer Config**: Install it once cluster-wide, and every developer immediately gets resource recommendations for their workloads.
 
 It is **Suggestion-First** and **GitOps-Safe**: it never modifies your workloads directly. Instead, it produces `ResourceSuggestion` objects that you can review and apply to your YAML manifests.
 
