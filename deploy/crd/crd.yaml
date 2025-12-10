@@ -13,6 +13,7 @@ spec:
     - sugg
     - ksugg
     - resug
+    - krs
   scope: Namespaced
   versions:
     - name: v1alpha1
