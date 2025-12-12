@@ -34,6 +34,17 @@ redis-cache    StatefulSet   redis       50m->50m      100m->100m     1Gi->1Gi  
 
 ---
 
+## ✅ Prerequisites
+
+Before installing, ensure you have the following:
+
+- **Kubernetes Cluster**: Any conformant cluster (v1.20+).
+- **Helm**: v3.0+ installed.
+- **kubectl**: Configured to communicate with your cluster.
+- **(Optional) Prometheus**: For historical data analysis (KRS works without it too!).
+
+---
+
 ## 🚀 Quick Start
 
 The chart is hosted on GitHub Container Registry (OCI).
@@ -106,6 +117,48 @@ All possible configuration values for `values.yaml`.
 | `serviceAccount.name` | Custom ServiceAccount name. | `""` |
 | `podSecurityContext` | Pod-level security context. | `{}` |
 | `securityContext` | Container-level security context. | `{}` |
+
+
+---
+
+## 🔐 Permissions
+
+To allow developers (or other roles) to **view** recommendations without giving them admin access, create a `ClusterRole` that grants read-only access to the CRD.
+
+**Example `rbac.yaml` to grant list permissions:**
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: krs-reader
+rules:
+  - apiGroups: ["suggester.krs.io"]
+    resources: ["resourcesuggestions"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: krs-reader-binding
+subjects:
+  # Grant to a Group
+  - kind: Group
+    name: developers
+    apiGroup: rbac.authorization.k8s.io
+  # OR Grant to a specific User
+  # - kind: User
+  #   name: jane@example.com
+  #   apiGroup: rbac.authorization.k8s.io
+  # OR Grant to a ServiceAccount
+  # - kind: ServiceAccount
+  #   name: default
+  #   namespace: demo-app
+roleRef:
+  kind: ClusterRole
+  name: krs-reader
+  apiGroup: rbac.authorization.k8s.io
+```
 
 ---
 
