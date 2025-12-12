@@ -41,6 +41,12 @@ spec:
             - name: PROMETHEUS_URL
               value: "http://{{ include "kube-resource-suggest.fullname" . }}-prometheus:{{ .Values.prometheus.service.port }}"
             {{- end }}
+            - name: OPENSHIFT_ENABLED
+              value: {{ .Values.openshift.enabled | quote }}
+            - name: SCAN_INTERVAL
+              value: {{ .Values.config.interval | quote }}
+            - name: BATCH_DELAY
+              value: {{ .Values.config.batchDelay | quote }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

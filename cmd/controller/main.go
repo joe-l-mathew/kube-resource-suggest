@@ -40,8 +40,30 @@ func main() {
 	fmt.Println(" -> Starting Control Loop...")
 	fmt.Println("==================================================")
 
-	// 2. The Control Loop
-	// In a real controller, this runs forever.
+	// 2. Control Loop Configuration
+	scanIntervalStr := os.Getenv("SCAN_INTERVAL")
+	if scanIntervalStr == "" {
+		scanIntervalStr = "1h"
+	}
+	scanInterval, err := time.ParseDuration(scanIntervalStr)
+	if err != nil {
+		fmt.Printf("Warning: Invalid SCAN_INTERVAL '%s', defaulting to 1h.\n", scanIntervalStr)
+		scanInterval = 1 * time.Hour
+	}
+
+	batchDelayStr := os.Getenv("BATCH_DELAY")
+	if batchDelayStr == "" {
+		batchDelayStr = "250ms"
+	}
+	batchDelay, err := time.ParseDuration(batchDelayStr)
+	if err != nil {
+		fmt.Printf("Warning: Invalid BATCH_DELAY '%s', defaulting to 250ms.\n", batchDelayStr)
+		batchDelay = 250 * time.Millisecond
+	}
+
+	fmt.Printf(" -> Config: Scan Interval = %s, Batch Delay = %s\n", scanInterval, batchDelay)
+	fmt.Println("==================================================")
+
 	var lastWorkloadCount int = -1
 
 	for {
@@ -49,26 +71,27 @@ func main() {
 		workloads, err := scanner.ListWorkloads(k8sClient)
 		if err != nil {
 			log.Printf("Error scanning: %v", err)
-			time.Sleep(10 * time.Second)
+			time.Sleep(10 * time.Second) // Retry quicker on error
 			continue
 		}
 
 		if len(workloads) != lastWorkloadCount {
-			// fmt.Printf("[%s] Watching %d workloads...\n", time.Now().Format("15:04:05"), len(workloads))
 			lastWorkloadCount = len(workloads)
 		}
 
 		changesCount := 0
 		for _, w := range workloads {
 			changesCount += processWorkload(k8sClient, coreClient, w)
+			// Rate Limiting: Sleep between processing items to avoid throttling
+			time.Sleep(batchDelay)
 		}
 
 		if changesCount > 0 {
-			// Optional: log summary of changes if needed
-			// fmt.Printf("[%s] Applied %d updates.\n", time.Now().Format("15:04:05"), changesCount)
+			// Optional: log summary
 		}
 
-		time.Sleep(10 * time.Second)
+		// fmt.Printf("[%s] Scan complete. Sleeping for %s...\n", time.Now().Format("15:04:05"), scanInterval)
+		time.Sleep(scanInterval)
 	}
 }
 

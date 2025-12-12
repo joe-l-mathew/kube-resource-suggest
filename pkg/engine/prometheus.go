@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -186,10 +187,13 @@ func GeneratePrometheusSuggestions(client dynamic.Interface, workload unstructur
 }
 
 func isPrometheusReachable(promURL string) bool {
-	client := http.Client{Timeout: 2 * time.Second}
+	client := createHttpClient()
 	// Simple health check or just query API
 	resp, err := client.Get(fmt.Sprintf("%s/-/healthy", promURL))
 	if err != nil {
+		if os.Getenv("LOG_LEVEL") == "debug" {
+			fmt.Printf("Debug: Prometheus health check failed: %v\n", err)
+		}
 		return false
 	}
 	defer resp.Body.Close()
@@ -207,13 +211,28 @@ type PromQueryResponse struct {
 }
 
 func queryPrometheusValue(promURL, query string) (float64, error) {
-	client := http.Client{Timeout: 10 * time.Second}
+	client := createHttpClient()
 	u, _ := url.Parse(fmt.Sprintf("%s/api/v1/query", promURL))
 	q := u.Query()
 	q.Set("query", query)
 	u.RawQuery = q.Encode()
 
-	resp, err := client.Get(u.String())
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		return 0, err
+	}
+
+	// Add Bearer Token if running in OpenShift mode
+	if os.Getenv("OPENSHIFT_ENABLED") == "true" {
+		tokenBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+		if err == nil {
+			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", string(tokenBytes)))
+		} else {
+			fmt.Printf("Warning: Failed to read service account token: %v\n", err)
+		}
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -257,4 +276,19 @@ func queryPrometheusValue(promURL, query string) (float64, error) {
 	}
 
 	return val, nil
+}
+
+func createHttpClient() *http.Client {
+	// If OpenShift is enabled, we need to skip verify for internal HTTPS endpoints
+	// as standard Service/Route certs might be self-signed or internal CA.
+	if os.Getenv("OPENSHIFT_ENABLED") == "true" {
+		tr := &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+		return &http.Client{
+			Transport: tr,
+			Timeout:   10 * time.Second,
+		}
+	}
+	return &http.Client{Timeout: 10 * time.Second}
 }

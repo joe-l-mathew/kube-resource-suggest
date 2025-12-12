@@ -72,7 +72,17 @@ helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
   --set prometheus.url="http://prometheus-operated.monitoring.svc:9090"
 ```
 
-**Option C: Install with Embedded Prometheus**
+**Option C: OpenShift (Thanos)**
+Enable OpenShift mode to automatically grant permissions to query the built-in Thanos querier.
+```bash
+helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
+  --namespace krs-system \
+  --create-namespace \
+  --set openshift.enabled=true \
+  --set prometheus.url="https://thanos-querier.openshift-monitoring.svc:9091"
+```
+
+**Option D: Install with Embedded Prometheus**
 Deploys a lightweight Prometheus instance alongside the controller.
 ```bash
 helm install krs oci://ghcr.io/joe-l-mathew/charts/krs \
@@ -106,10 +116,19 @@ All possible configuration values for `values.yaml`.
 | `resources.requests.memory` | Controller Memory request. | `64Mi` |
 | `resources.limits.cpu` | Controller CPU limit. | `200m` |
 | `resources.limits.memory` | Controller Memory limit. | `256Mi` |
+| **Performance** | | |
+| `config.interval` | Duration between full cluster scans. | `1h` |
+| `config.batchDelay` | Delay between processing each workload (rate limiting). | `250ms` |
+| **OpenShift** | | |
+| `openshift.enabled` | Enable OpenShift-specific RBAC (ClusterMonitoringView). | `false` |
 | **Prometheus** | | |
 | `prometheus.url` | External Prometheus URL. If set, overrides embedded. | `""` |
 | `prometheus.enabled` | Deploy embedded Prometheus. | `false` |
+| `prometheus.image.repository` | Prometheus image repository. | `prom/prometheus` |
+| `prometheus.image.tag` | Prometheus image tag. | `v2.45.0` |
+| `prometheus.image.pullPolicy` | Prometheus image pull policy. | `IfNotPresent` |
 | `prometheus.persistence.enabled` | Enable PVC for embedded Prometheus. | `true` |
+| `prometheus.persistence.storageClass` | PVC storage class for embedded Prometheus. | `""` |
 | `prometheus.persistence.size` | PVC size for embedded Prometheus. | `5Gi` |
 | `prometheus.retention` | Data retention (not configurable via values yet, hardcoded). | `7d` |
 | **Security** | | |
